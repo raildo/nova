@@ -806,6 +806,31 @@ class NovaMigrationsCheckers(test_migrations.ModelsMigrationsSync,
         self.assertIndexMembers(engine, 'instance_system_metadata',
                                 'instance_uuid', ['instance_uuid'])
 
+    def _pre_upgrade_313(self, engine):
+        # create a fake quota for checking whether allocated quota will
+        # take default value 0
+        quotas = oslodbutils.get_table(engine, 'quotas')
+        fake_quota = {'id': 1, 'resource': 'fake'}
+        quotas.insert().execute(fake_quota)
+
+    def _check_313(self, engine, data):
+        self.assertColumnExists(engine, 'quotas', 'allocated')
+        self.assertColumnExists(engine, 'shadow_quotas', 'allocated')
+        quotas = oslodbutils.get_table(engine, 'quotas')
+        shadow_quotas = oslodbutils.get_table(engine, 'shadow_quotas')
+
+        # Make sure that a new quota entry will have default
+        # allocated quota value as 0
+        quotas = oslodbutils.get_table(engine, 'quotas')
+        quota = quotas.select(
+            quotas.c.id == 1).execute().first()
+        self.assertEqual(0, quota.allocated)
+
+        self.assertIsInstance(quotas.c.allocated.type,
+                              sqlalchemy.types.Integer)
+        self.assertIsInstance(shadow_quotas.c.allocated.type,
+                              sqlalchemy.types.Integer)
+
 
 class TestNovaMigrationsSQLite(NovaMigrationsCheckers,
                                test_base.DbTestCase,

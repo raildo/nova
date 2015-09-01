@@ -433,6 +433,11 @@ class Quota(BASE, NovaBase):
     resource = Column(String(255), nullable=False)
     hard_limit = Column(Integer)
 
+    # allocated is the sum of the quota hard_limit values of immediate child
+    # projects. It defaults to 0, since it will be zero till the parent project
+    # allocated a finite quota to its immediate child projects
+    allocated = Column(Integer, default=0)
+
 
 class ProjectUserQuota(BASE, NovaBase):
     """Represents a single quota override for a user with in a project."""
