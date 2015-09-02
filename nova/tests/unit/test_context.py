@@ -11,6 +11,8 @@
 #    WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied. See the
 #    License for the specific language governing permissions and limitations
 #    under the License.
+import mock
+import uuid
 
 from oslo_context import context as o_context
 from oslo_context import fixture as o_fixture
@@ -223,3 +225,85 @@ class ContextTestCase(test.NoDBTestCase):
         self.assertEqual('222', ctx.project_id)
         values2 = ctx.to_dict()
         self.assertEqual(values, values2)
+
+
+class HierarhcyInfoTestCase(test.NoDBTestCase):
+
+    class FakeProject(object):
+
+        def __init__(self, project_id='foo', parent_id=None):
+            self.project_id = project_id
+            self.parent_id = parent_id
+            self.subtree = None
+
+    def setUp(self):
+        super(HierarhcyInfoTestCase, self).setUp()
+        self.keystone = context.KEYSTONE
+
+        self.req = self.mox.CreateMockAnything()
+        self.req.environ = {'nova.context': context.get_admin_context()}
+        self.req.environ['nova.context'].is_admin = True
+        self.req.environ['nova.context'].auth_token = uuid.uuid4().hex
+        url = 'http://identity:5000/v3'
+        service = {'id': '123',
+                    'name': 'keystone',
+                    'links': {'self': url},
+                    'type': 'key-manager'}
+        self.req.environ['nova.context'].service_catalog = [service]
+        self._create_project_hierarchy()
+
+    def _create_project_hierarchy(self):
+        """Sets an environment used for nested quotas tests.
+
+        Create a project hierarchy such as follows:
+        +-----------+
+        |           |
+        |     A     |
+        |    / \    |
+        |   B   C   |
+        |  /        |
+        | D         |
+        +-----------+
+        """
+        self.A = self.FakeProject(project_id=uuid.uuid4().hex, parent_id=None)
+        self.B = self.FakeProject(project_id=uuid.uuid4().hex,
+                                  parent_id=self.A.project_id)
+        self.C = self.FakeProject(project_id=uuid.uuid4().hex,
+                                  parent_id=self.A.project_id)
+        self.D = self.FakeProject(project_id=uuid.uuid4().hex,
+                                  parent_id=self.B.project_id)
+
+        # update projects subtrees
+        self.B.subtree = {self.D.project_id: self.D.subtree}
+        self.A.subtree = {self.B.project_id: self.B.subtree,
+                          self.C.project_id: self.C.subtree}
+
+        # project_by_id attribute is used to recover a project based on its id.
+        self.project_by_id = {self.A.project_id: self.A,
+                              self.B.project_id: self.B,
+                              self.C.project_id: self.C,
+                              self.D.project_id: self.D}
+
+        self.parent_by_id = {self.A.project_id: self.A.parent_id,
+                             self.B.project_id: self.B.parent_id,
+                             self.C.project_id: self.C.parent_id,
+                             self.D.project_id: self.D.parent_id}
+
+    def _get_project(self, context, project_id, subtree=False):
+        return self.project_by_id.get(project_id, self.FakeProject())
+
+    def test_get_parent_project(self):
+        self.keystone.get_project = mock.Mock()
+        self.keystone.get_project.side_effect = self._get_project
+        ctx = self.req.environ['nova.context']
+        result = self.keystone.get_project(ctx, self.B.project_id)
+        self.assertEqual(result.parent_id, self.A.project_id)
+
+    def test_get_subtree(self):
+        self.keystone.get_project = mock.Mock()
+        self.keystone.get_project.side_effect = self._get_project
+        ctx = self.req.environ['nova.context']
+        result = self.keystone.get_project(ctx,
+                                           self.A.project_id,
+                                           subtree=True)
+        self.assertEqual(result.subtree, self.A.subtree)

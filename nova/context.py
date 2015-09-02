@@ -21,6 +21,7 @@ import copy
 
 from keystoneclient import auth
 from keystoneclient import service_catalog
+from keystoneclient.v3 import client
 from oslo_context import context
 from oslo_log import log as logging
 from oslo_utils import timeutils
@@ -210,6 +211,44 @@ class RequestContext(context.RequestContext):
         return "<Context %s>" % self.to_dict()
 
 
+class HierarchyInfo(context.RequestContext):
+
+    def _get_auth_parameters(self, context):
+
+        """Helper function for finding the authentication
+        parameters for communicating with keystone
+
+        :param context: The request context, for access checks
+        """
+        auth_url = None
+        plugin = _ContextAuthPlugin(context.auth_token,
+                                    context.service_catalog)
+        token = plugin.get_token()
+        for service in context.service_catalog:
+            if service.get('name') == 'keystone':
+                auth_url = service.get('links')['self']
+        auth_param = {"token": token, "auth_url": auth_url}
+        return auth_param
+
+    def get_project(self, context, project_id, subtree=False):
+
+        """Helper function for finding the parent_id of a project.
+        For root project ,parent_id is NULL
+
+        :param context: The request context, for access checks
+        :param project_id: The ID of the project whose parent_id
+                           needs to be found out.
+        """
+        auth_param = self._get_auth_parameters(context)
+        token = auth_param.get("token")
+        auth_url = auth_param.get("auth_url")
+        keystone = client.Client(token=token, auth_url=auth_url,
+                                 project_id=project_id)
+        project = keystone.projects.get(project_id,
+                                        subtree_as_ids=subtree)
+        return project
+
+
 def get_admin_context(read_deleted="no"):
     return RequestContext(user_id=None,
                           project_id=None,
@@ -268,3 +307,6 @@ def authorize_quota_class_context(context, class_name):
             raise exception.Forbidden()
         elif context.quota_class != class_name:
             raise exception.Forbidden()
+
+
+KEYSTONE = HierarchyInfo()
