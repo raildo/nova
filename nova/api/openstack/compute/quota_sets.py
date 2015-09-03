@@ -70,12 +70,15 @@ class QuotaSetsController(wsgi.Controller):
                    {'limit': limit, 'resource': resource, 'maximum': maximum})
             raise webob.exc.HTTPBadRequest(explanation=msg)
 
-    def _get_quotas(self, context, id, user_id=None, usages=False):
+    def _get_quotas(self, context, id, user_id=None, usages=False,
+                    parent_project_id=None):
         if user_id:
             values = QUOTAS.get_user_quotas(context, id, user_id,
                                             usages=usages)
         else:
-            values = QUOTAS.get_project_quotas(context, id, usages=usages)
+            values = QUOTAS.get_project_quotas(
+                context, id, usages=usages,
+                parent_project_id=parent_project_id)
 
         if usages:
             return values
@@ -151,7 +154,9 @@ class QuotaSetsController(wsgi.Controller):
     def defaults(self, req, id):
         context = req.environ['nova.context']
         authorize(context, action='defaults', target={'project_id': id})
-        values = QUOTAS.get_defaults(context)
+        parent_project_id = None
+        values = QUOTAS.get_defaults(
+            context, parent_project_id=parent_project_id)
         return self._format_quota_set(id, values)
 
     # TODO(oomichi): Here should be 204(No Content) instead of 202 by v2.1
