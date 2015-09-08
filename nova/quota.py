@@ -134,7 +134,6 @@ class DbQuotaDriver(object):
         :param parent_project_id: The id of the current project's parent,
                                   if any.
         """
-
         quotas = {}
         default_quotas = {}
         if not parent_project_id:
@@ -187,6 +186,9 @@ class DbQuotaDriver(object):
         default_quotas = self.get_defaults(context, resources,
                                            parent_project_id=parent_project_id)
 
+        allocated_quotas =  db.quota_allocated_get_all_by_project(
+            context, project_id)
+        allocated_quotas.pop('project_id')
         for resource in resources.values():
             # Omit default/quota class values
             if not defaults and resource.name not in quotas:
@@ -205,6 +207,10 @@ class DbQuotaDriver(object):
                     in_use=usage.get('in_use', 0),
                     reserved=usage.get('reserved', 0),
                     )
+                if parent_project_id or allocated_quotas:
+                    if modified_quotas[resource.name] is not None:
+                        modified_quotas[resource.name].update(
+                            allocated=allocated_quotas.get(resource.name, 0), )
             # Initialize remains quotas.
             if remains:
                 modified_quotas[resource.name].update(remains=limit)
@@ -1261,7 +1267,8 @@ class QuotaEngine(object):
             defaults=defaults, usages=usages, remains=remains,
             parent_project_id=parent_project_id)
 
-    def get_settable_quotas(self, context, project_id, user_id=None):
+    def get_settable_quotas(self, context, project_id, user_id=None,
+	    parent_project_id=None):
         """Given a list of resources, retrieve the range of settable quotas for
         the given user or project.
 
@@ -1272,7 +1279,8 @@ class QuotaEngine(object):
 
         return self._driver.get_settable_quotas(context, self._resources,
                                                 project_id,
-                                                user_id=user_id)
+                                                user_id=user_id,
+						parent_project_id=parent_project_id)
 
     def count(self, context, resource, *args, **kwargs):
         """Count a resource.

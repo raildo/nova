@@ -3170,6 +3170,15 @@ def quota_get_all_by_project(context, project_id):
 
 
 @require_context
+def quota_allocated_get_all_by_project(context, project_id):
+    rows = model_query(context, models.Quota, read_deleted='no').filter_by(
+        project_id=project_id).all()
+    result = {'project_id': project_id}
+    for row in rows:
+        result[row.resource] = row.allocated
+    return result
+
+@require_context
 def quota_get_all(context, project_id):
     result = model_query(context, models.ProjectUserQuota).\
                    filter_by(project_id=project_id).\
@@ -3178,7 +3187,7 @@ def quota_get_all(context, project_id):
     return result
 
 
-def quota_create(context, project_id, resource, limit, user_id=None):
+def quota_create(context, project_id, resource, limit, user_id=None, allocated=0):
     per_user = user_id and resource not in PER_PROJECT_QUOTAS
     quota_ref = models.ProjectUserQuota() if per_user else models.Quota()
     if per_user:
@@ -3186,6 +3195,7 @@ def quota_create(context, project_id, resource, limit, user_id=None):
     quota_ref.project_id = project_id
     quota_ref.resource = resource
     quota_ref.hard_limit = limit
+    quota_ref.allocated = allocated
     try:
         quota_ref.save()
     except db_exc.DBDuplicateEntry:
@@ -3209,6 +3219,20 @@ def quota_update(context, project_id, resource, limit, user_id=None):
                                                      user_id=user_id)
         else:
             raise exception.ProjectQuotaNotFound(project_id=project_id)
+
+
+@require_context
+def quota_allocated_update(context, project_id, resource, allocated):
+    session = get_session()
+    model = models.Quota
+    query = model_query(context, model).\
+                filter_by(project_id=project_id).\
+                filter_by(resource=resource)
+    with session.begin():
+        result = query.update({'allocated': allocated})
+        if not result:
+            raise exception.ProjectQuotaNotFound(project_id=project_id)
+        return result
 
 
 ###################

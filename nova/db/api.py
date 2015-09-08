@@ -1023,10 +1023,10 @@ def network_update(context, network_id, values):
 ###############
 
 
-def quota_create(context, project_id, resource, limit, user_id=None):
+def quota_create(context, project_id, resource, limit, user_id=None, allocated=0):
     """Create a quota for the given project and resource."""
     return IMPL.quota_create(context, project_id, resource, limit,
-                             user_id=user_id)
+                             user_id=user_id, allocated=allocated)
 
 
 def quota_get(context, project_id, resource, user_id=None):
@@ -1048,6 +1048,16 @@ def quota_get_all(context, project_id):
     """Retrieve all user quotas associated with a given project."""
     return IMPL.quota_get_all(context, project_id)
 
+
+def quota_allocated_get_all_by_project(context, project_id):
+    """Retrieve all allocated quotas associated with a given project."""
+    return IMPL.quota_allocated_get_all_by_project(context, project_id)
+
+def quota_allocated_update(context, project_id,
+                                   resource, allocated):
+    """Update allocated quota to subprojects or raise if it does not exist."""
+    return IMPL.quota_allocated_update(context, project_id,
+                                       resource, allocated)
 
 def quota_update(context, project_id, resource, limit, user_id=None):
     """Update a quota or raise if it does not exist."""

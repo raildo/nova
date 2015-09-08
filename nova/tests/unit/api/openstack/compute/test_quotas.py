@@ -17,11 +17,13 @@
 import copy
 
 import mock
+import uuid
 import webob
 
 from nova.api.openstack.compute.legacy_v2.contrib import quotas as quotas_v2
 from nova.api.openstack.compute import quota_sets as quotas_v21
 from nova.api.openstack import extensions
+from nova import context
 from nova import db
 from nova import exception
 from nova import quota
@@ -43,6 +45,13 @@ def quota_set(id, include_server_group_quotas=True):
 
 
 class BaseQuotaSetsTest(test.TestCase):
+
+    class FakeProject(object):
+
+        def __init__(self, id='foo', parent_id=None):
+            self.id = id
+            self.parent_id = parent_id
+            self.subtree = None
 
     def _is_v20_api_test(self):
         # NOTE(oomichi): If a test is for v2.0 API, this method returns
@@ -68,8 +77,37 @@ class BaseQuotaSetsTest(test.TestCase):
             # method instead of status_int in a response object.
             return self.controller.delete.wsgi_code
 
+    def _create_project_hierarchy(self):
+        """Sets an environment used for nested quotas tests.
+        Create a project hierarchy such as follows:
+        +-----------+
+        |           |
+        |     A     |
+        |    / \    |
+        |   B   C   |
+        |  /        |
+        | D         |
+        +-----------+
+        """
+        self.A = self.FakeProject(id=uuid.uuid4().hex, parent_id=None)
+        self.B = self.FakeProject(id=uuid.uuid4().hex, parent_id=self.A.id)
+        self.C = self.FakeProject(id=uuid.uuid4().hex, parent_id=self.A.id)
+        self.D = self.FakeProject(id=uuid.uuid4().hex, parent_id=self.B.id)
+
+        # update projects subtrees
+        self.B.subtree = {self.D.id: self.D.subtree}
+        self.A.subtree = {self.B.id: self.B.subtree, self.C.id: self.C.subtree}
+
+        # project_by_id attribute is used to recover a project based on its id.
+        self.project_by_id = {self.A.id: self.A, self.B.id: self.B,
+                              self.C.id: self.C, self.D.id: self.D}
+
+    def get_project(self, context, id, subtree=False):
+        return self.project_by_id.get(id, self.FakeProject())
+
 
 class QuotaSetsTestV21(BaseQuotaSetsTest):
+
     plugin = quotas_v21
     validation_error = exception.ValidationError
     include_server_group_quotas = True
@@ -94,6 +132,7 @@ class QuotaSetsTestV21(BaseQuotaSetsTest):
         if self.include_server_group_quotas:
             self.default_quotas['server_groups'] = 10
             self.default_quotas['server_group_members'] = 10
+        self._create_project_hierarchy()
 
     def _setup_controller(self):
         self.ext_mgr = self.mox.CreateMock(extensions.ExtensionManager)
@@ -101,6 +140,34 @@ class QuotaSetsTestV21(BaseQuotaSetsTest):
 
     def _get_http_request(self, url=''):
         return fakes.HTTPRequest.blank(url)
+
+    def _create_project_hierarchy(self):
+        """Sets an environment used for nested quotas tests.
+        Create a project hierarchy such as follows:
+        +-----------+
+        |           |
+        |     A     |
+        |    / \    |
+        |   B   C   |
+        |  /        |
+        | D         |
+        +-----------+
+        """
+        self.A = self.FakeProject(id=uuid.uuid4().hex, parent_id=None)
+        self.B = self.FakeProject(id=uuid.uuid4().hex, parent_id=self.A.id)
+        self.C = self.FakeProject(id=uuid.uuid4().hex, parent_id=self.A.id)
+        self.D = self.FakeProject(id=uuid.uuid4().hex, parent_id=self.B.id)
+
+        # update projects subtrees
+        self.B.subtree = {self.D.id: self.D.subtree}
+        self.A.subtree = {self.B.id: self.B.subtree, self.C.id: self.C.subtree}
+
+        # project_by_id attribute is used to recover a project based on its id.
+        self.project_by_id = {self.A.id: self.A, self.B.id: self.B,
+                              self.C.id: self.C, self.D.id: self.D}
+
+    def get_project(self, context, id, subtree=False):
+        return self.project_by_id.get(id, self.FakeProject())
 
     def test_format_quota_set(self):
         quota_set = self.controller._format_quota_set('1234',
@@ -174,6 +241,8 @@ class QuotaSetsTestV21(BaseQuotaSetsTest):
                           resource, db.MAX_INT + 1, -1, -1)
 
     def test_quotas_defaults(self):
+        context.KEYSTONE.get_project = mock.Mock()
+        context.KEYSTONE.get_project.side_effect = self.get_project
         uri = '/v2/fake_tenant/os-quota-sets/fake_tenant/defaults'
 
         req = fakes.HTTPRequest.blank(uri)
@@ -184,6 +253,8 @@ class QuotaSetsTestV21(BaseQuotaSetsTest):
         self.assertEqual(res_dict, expected)
 
     def test_quotas_show(self):
+        context.KEYSTONE.get_project = mock.Mock()
+        context.KEYSTONE.get_project.side_effect = self.get_project
         self.setup_mock_for_show()
         req = self._get_http_request()
         res_dict = self.controller.show(req, 1234)
@@ -192,6 +263,8 @@ class QuotaSetsTestV21(BaseQuotaSetsTest):
         self.assertEqual(res_dict, ref_quota_set)
 
     def test_quotas_update(self):
+        context.KEYSTONE.get_project = mock.Mock()
+        context.KEYSTONE.get_project.side_effect = self.get_project
         self.setup_mock_for_update()
         self.default_quotas.update({
             'instances': 50,
@@ -204,6 +277,8 @@ class QuotaSetsTestV21(BaseQuotaSetsTest):
 
     @mock.patch('nova.objects.Quotas.create_limit')
     def test_quotas_update_with_good_data(self, mock_createlimit):
+        context.KEYSTONE.get_project = mock.Mock()
+        context.KEYSTONE.get_project.side_effect = self.get_project
         self.setup_mock_for_update()
         self.default_quotas.update({})
         body = {'quota_set': self.default_quotas}
@@ -216,6 +291,8 @@ class QuotaSetsTestV21(BaseQuotaSetsTest):
     @mock.patch('nova.objects.Quotas.create_limit')
     def test_quotas_update_with_bad_data(self, mock_createlimit,
                                                   mock_validate):
+        context.KEYSTONE.get_project = mock.Mock()
+        context.KEYSTONE.get_project.side_effect = self.get_project
         self.setup_mock_for_update()
         self.default_quotas.update({
             'instances': 50,
@@ -229,6 +306,8 @@ class QuotaSetsTestV21(BaseQuotaSetsTest):
                          len(mock_createlimit.mock_calls))
 
     def test_quotas_update_zero_value(self):
+        context.KEYSTONE.get_project = mock.Mock()
+        context.KEYSTONE.get_project.side_effect = self.get_project
         self.setup_mock_for_update()
         body = {'quota_set': {'instances': 0, 'cores': 0,
                               'ram': 0, 'floating_ips': 0,
@@ -248,6 +327,8 @@ class QuotaSetsTestV21(BaseQuotaSetsTest):
         self.assertEqual(body, res_dict)
 
     def _quotas_update_bad_request_case(self, body):
+        context.KEYSTONE.get_project = mock.Mock()
+        context.KEYSTONE.get_project.side_effect = self.get_project
         self.setup_mock_for_update()
         req = self._get_http_request()
         self.assertRaises(self.validation_error, self.controller.update,
@@ -296,6 +377,8 @@ class QuotaSetsTestV21(BaseQuotaSetsTest):
         self._quotas_update_bad_request_case(body)
 
     def test_quotas_delete(self):
+        context.KEYSTONE.get_project = mock.Mock()
+        context.KEYSTONE.get_project.side_effect = self.get_project
         if self._is_v20_api_test():
             self.ext_mgr.is_loaded('os-extended-quotas').AndReturn(True)
         req = self._get_http_request()
@@ -316,6 +399,7 @@ class ExtendedQuotasTestV21(BaseQuotaSetsTest):
         super(ExtendedQuotasTestV21, self).setUp()
         self._setup_controller()
         self.setup_mock_for_update()
+        self._create_project_hierarchy()
 
     fake_quotas = {'ram': {'limit': 51200,
                            'in_use': 12800,
@@ -330,6 +414,34 @@ class ExtendedQuotasTestV21(BaseQuotaSetsTest):
     def _setup_controller(self):
         self.ext_mgr = self.mox.CreateMock(extensions.ExtensionManager)
         self.controller = self.plugin.QuotaSetsController(self.ext_mgr)
+
+    def _create_project_hierarchy(self):
+        """Sets an environment used for nested quotas tests.
+        Create a project hierarchy such as follows:
+        +-----------+
+        |           |
+        |     A     |
+        |    / \    |
+        |   B   C   |
+        |  /        |
+        | D         |
+        +-----------+
+        """
+        self.A = self.FakeProject(id=uuid.uuid4().hex, parent_id=None)
+        self.B = self.FakeProject(id=uuid.uuid4().hex, parent_id=self.A.id)
+        self.C = self.FakeProject(id=uuid.uuid4().hex, parent_id=self.A.id)
+        self.D = self.FakeProject(id=uuid.uuid4().hex, parent_id=self.B.id)
+
+        # update projects subtrees
+        self.B.subtree = {self.D.id: self.D.subtree}
+        self.A.subtree = {self.B.id: self.B.subtree, self.C.id: self.C.subtree}
+
+        # project_by_id attribute is used to recover a project based on its id.
+        self.project_by_id = {self.A.id: self.A, self.B.id: self.B,
+                              self.C.id: self.C, self.D.id: self.D}
+
+    def get_project(self, context, id, subtree=False):
+        return self.project_by_id.get(id, self.FakeProject())
 
     def fake_get_quotas(self, context, id, user_id=None, usages=False):
         if usages:
@@ -354,6 +466,8 @@ class ExtendedQuotasTestV21(BaseQuotaSetsTest):
         return fakes.HTTPRequest.blank(url)
 
     def test_quotas_update_exceed_in_used(self):
+        context.KEYSTONE.get_project = mock.Mock()
+        context.KEYSTONE.get_project.side_effect = self.get_project
         patcher = mock.patch.object(quota.QUOTAS, 'get_settable_quotas')
         get_settable_quotas = patcher.start()
 
@@ -366,6 +480,8 @@ class ExtendedQuotasTestV21(BaseQuotaSetsTest):
         mock.patch.stopall()
 
     def test_quotas_force_update_exceed_in_used(self):
+        context.KEYSTONE.get_project = mock.Mock()
+        context.KEYSTONE.get_project.side_effect = self.get_project
         patcher = mock.patch.object(quota.QUOTAS, 'get_settable_quotas')
         get_settable_quotas = patcher.start()
         patcher = mock.patch.object(self.plugin.QuotaSetsController,
@@ -382,6 +498,8 @@ class ExtendedQuotasTestV21(BaseQuotaSetsTest):
 
     @mock.patch('nova.objects.Quotas.create_limit')
     def test_quotas_update_good_data(self, mock_createlimit):
+        context.KEYSTONE.get_project = mock.Mock()
+        context.KEYSTONE.get_project.side_effect = self.get_project
         body = {'quota_set': {'cores': 1,
                               'instances': 1}}
         req = fakes.HTTPRequest.blank('/v2/fake4/os-quota-sets/update_me',
@@ -392,6 +510,8 @@ class ExtendedQuotasTestV21(BaseQuotaSetsTest):
 
     @mock.patch('nova.objects.Quotas.create_limit')
     def test_quotas_update_bad_data(self, mock_createlimit):
+        context.KEYSTONE.get_project = mock.Mock()
+        context.KEYSTONE.get_project.side_effect = self.get_project
         patcher = mock.patch.object(quota.QUOTAS, 'get_settable_quotas')
         get_settable_quotas = patcher.start()
 
@@ -415,6 +535,7 @@ class UserQuotasTestV21(BaseQuotaSetsTest):
     def setUp(self):
         super(UserQuotasTestV21, self).setUp()
         self._setup_controller()
+        self._create_project_hierarchy()
 
     def _get_http_request(self, url=''):
         return fakes.HTTPRequest.blank(url)
@@ -423,8 +544,38 @@ class UserQuotasTestV21(BaseQuotaSetsTest):
         self.ext_mgr = self.mox.CreateMock(extensions.ExtensionManager)
         self.controller = self.plugin.QuotaSetsController(self.ext_mgr)
 
+    def _create_project_hierarchy(self):
+        """Sets an environment used for nested quotas tests.
+        Create a project hierarchy such as follows:
+        +-----------+
+        |           |
+        |     A     |
+        |    / \    |
+        |   B   C   |
+        |  /        |
+        | D         |
+        +-----------+
+        """
+        self.A = self.FakeProject(id=uuid.uuid4().hex, parent_id=None)
+        self.B = self.FakeProject(id=uuid.uuid4().hex, parent_id=self.A.id)
+        self.C = self.FakeProject(id=uuid.uuid4().hex, parent_id=self.A.id)
+        self.D = self.FakeProject(id=uuid.uuid4().hex, parent_id=self.B.id)
+
+        # update projects subtrees
+        self.B.subtree = {self.D.id: self.D.subtree}
+        self.A.subtree = {self.B.id: self.B.subtree, self.C.id: self.C.subtree}
+
+        # project_by_id attribute is used to recover a project based on its id.
+        self.project_by_id = {self.A.id: self.A, self.B.id: self.B,
+                              self.C.id: self.C, self.D.id: self.D}
+
+    def get_project(self, context, id, subtree=False):
+        return self.project_by_id.get(id, self.FakeProject())
+
     def test_user_quotas_show(self):
         self.setup_mock_for_show()
+        context.KEYSTONE.get_project = mock.Mock()
+        context.KEYSTONE.get_project.side_effect = self.get_project
         req = self._get_http_request('/v2/fake4/os-quota-sets/1234?user_id=1')
         res_dict = self.controller.show(req, 1234)
         ref_quota_set = quota_set('1234', self.include_server_group_quotas)
@@ -432,6 +583,8 @@ class UserQuotasTestV21(BaseQuotaSetsTest):
 
     def test_user_quotas_update(self):
         self.setup_mock_for_update()
+        context.KEYSTONE.get_project = mock.Mock()
+        context.KEYSTONE.get_project.side_effect = self.get_project
         body = {'quota_set': {'instances': 10, 'cores': 20,
                               'ram': 51200, 'floating_ips': 10,
                               'fixed_ips': -1, 'metadata_items': 128,
@@ -453,6 +606,8 @@ class UserQuotasTestV21(BaseQuotaSetsTest):
 
     def test_user_quotas_update_exceed_project(self):
         self.setup_mock_for_update()
+        context.KEYSTONE.get_project = mock.Mock()
+        context.KEYSTONE.get_project.side_effect = self.get_project
         body = {'quota_set': {'instances': 20}}
 
         url = '/v2/fake4/os-quota-sets/update_me?user_id=1'
@@ -461,6 +616,8 @@ class UserQuotasTestV21(BaseQuotaSetsTest):
                           req, 'update_me', body=body)
 
     def test_user_quotas_delete(self):
+        context.KEYSTONE.get_project = mock.Mock()
+        context.KEYSTONE.get_project.side_effect = self.get_project
         if self._is_v20_api_test():
             self.ext_mgr.is_loaded('os-extended-quotas').AndReturn(True)
             self.ext_mgr.is_loaded('os-user-quotas').AndReturn(True)
@@ -477,6 +634,8 @@ class UserQuotasTestV21(BaseQuotaSetsTest):
 
     @mock.patch('nova.objects.Quotas.create_limit')
     def test_user_quotas_update_good_data(self, mock_createlimit):
+        context.KEYSTONE.get_project = mock.Mock()
+        context.KEYSTONE.get_project.side_effect = self.get_project
         self.setup_mock_for_update()
         body = {'quota_set': {'instances': 1,
                               'cores': 1}}
@@ -489,6 +648,8 @@ class UserQuotasTestV21(BaseQuotaSetsTest):
 
     @mock.patch('nova.objects.Quotas.create_limit')
     def test_user_quotas_update_bad_data(self, mock_createlimit):
+        context.KEYSTONE.get_project = mock.Mock()
+        context.KEYSTONE.get_project.side_effect = self.get_project
         self.setup_mock_for_update()
         body = {'quota_set': {'instances': 20,
                               'cores': 1}}
@@ -627,6 +788,165 @@ class ExtendedQuotasTestV2(ExtendedQuotasTestV21):
 
     def _get_http_request(self, url=''):
         return fakes.HTTPRequest.blank(url, use_admin_context=True)
+
+class HierarchicalQuotasTestV21(QuotaSetsTestV21):
+
+    def setUp(self):
+        super(HierarchicalQuotasTestV21, self).setUp()
+        self.default_subproject_quotas = (
+            {k : 0 for k, v in self.default_quotas.iteritems()})
+
+    def test_quotas_subproject_defaults(self):
+        context.KEYSTONE.get_project = mock.Mock()
+        context.KEYSTONE.get_project.side_effect = self.get_project
+        uri = '/v2/%s/os-quota-sets/%s/defaults' % (self.A.id, self.B.id)
+
+        req = fakes.HTTPRequest.blank(uri)
+        res_dict = self.controller.defaults(req, self.B.id)
+        self.default_subproject_quotas.update({'id': self.B.id})
+        expected = {'quota_set': self.default_subproject_quotas}
+
+        self.assertEqual(res_dict, expected)
+
+    def test_quotas_subproject_show(self):
+        context.KEYSTONE.get_project = mock.Mock()
+        context.KEYSTONE.get_project.side_effect = self.get_project
+        req = self._get_http_request()
+        req.environ['nova.context'].project_id = self.A.id
+        res_dict = self.controller.show(req, self.B.id)
+
+        self.default_subproject_quotas.update({'id': self.B.id})
+        expected = {'quota_set': self.default_subproject_quotas}
+        self.assertEqual(res_dict, expected)
+
+    def test_quotas_subproject_show_error(self):
+        context.KEYSTONE.get_project = mock.Mock()
+        context.KEYSTONE.get_project.side_effect = self.get_project
+        req = self._get_http_request()
+        req.environ['nova.context'].project_id = self.B.id
+        self.assertRaises(webob.exc.HTTPForbidden,
+                          self.controller.show,
+                          req, self.A.id)
+
+    def test_show_quota_other_hierarchy_error(self):
+        context.KEYSTONE.get_project = mock.Mock()
+        context.KEYSTONE.get_project.side_effect = self.get_project
+	#creating a new hierarchy
+	E = self.FakeProject(id=uuid.uuid4().hex, parent_id=None)
+	F = self.FakeProject(id=uuid.uuid4().hex, parent_id=E.id)
+	self.project_by_id[E.id] = E
+	self.project_by_id[F.id] = F
+
+        req = self._get_http_request()
+        req.environ['nova.context'].project_id = self.A.id
+        self.assertRaises(webob.exc.HTTPForbidden,
+                          self.controller.show,
+                          req, F.id)
+
+    def test_quotas_subproject_update(self):
+        context.KEYSTONE.get_project = mock.Mock()
+        context.KEYSTONE.get_project.side_effect = self.get_project
+        req = self._get_http_request()
+        req.environ['nova.context'].project_id = self.A.id
+        self.default_subproject_quotas.update({
+            'instances': 50,
+            'cores': 50
+        })
+        body = {'quota_set': self.default_subproject_quotas}
+        self.controller.update(req, self.A.id, body=body)
+        res_dict = self.controller.update(req, self.B.id, body=body)
+        self.assertEqual(body, res_dict)
+
+    def test_update_quota_in_other_hierarchy_error(self):
+        context.KEYSTONE.get_project = mock.Mock()
+        context.KEYSTONE.get_project.side_effect = self.get_project
+        req = self._get_http_request()
+        req.environ['nova.context'].project_id = self.A.id
+	#creating a new hierarchy
+	E = self.FakeProject(id=uuid.uuid4().hex, parent_id=None)
+	F = self.FakeProject(id=uuid.uuid4().hex, parent_id=E.id)
+	self.project_by_id[E.id] = E
+	self.project_by_id[F.id] = F
+
+        self.default_subproject_quotas.update({
+            'instances': 50,
+            'cores': 50
+        })
+        body = {'quota_set': self.default_subproject_quotas}
+
+        self.assertRaises(webob.exc.HTTPForbidden,
+                          self.controller.update,
+                          req, F.id, body=body)
+
+    def test_subproject_overquota_update(self):
+        context.KEYSTONE.get_project = mock.Mock()
+        context.KEYSTONE.get_project.side_effect = self.get_project
+        req = self._get_http_request()
+        req.environ['nova.context'].project_id = self.A.id
+        self.default_subproject_quotas.update({
+            'instances': 50,
+            'cores': 50
+        })
+        body = {'quota_set': self.default_subproject_quotas}
+        self.controller.update(req, self.A.id, body=body)
+        self.default_subproject_quotas.update({
+            'instances': 60,
+            'cores': 60
+        })
+        body = {'quota_set': self.default_subproject_quotas}
+        self.assertRaises(webob.exc.HTTPBadRequest,
+                          self.controller.update,
+                          req, self.B.id, body=body)
+
+    def test_subproject_underquota_update(self):
+        context.KEYSTONE.get_project = mock.Mock()
+        context.KEYSTONE.get_project.side_effect = self.get_project
+        req = self._get_http_request()
+        req.environ['nova.context'].project_id = self.A.id
+        self.default_subproject_quotas.update({
+            'instances': 50,
+            'cores': 50
+        })
+        body = {'quota_set': self.default_subproject_quotas}
+        self.controller.update(req, self.A.id, body=body)
+        self.default_subproject_quotas.update({
+            'instances': -10,
+            'cores': -20 
+        })
+        body = {'quota_set': self.default_subproject_quotas}
+        self.assertRaises(exception.ValidationError,
+                          self.controller.update,
+                          req, self.B.id, body=body)
+
+    def test_update_own_subprojct_quota(self):
+        context.KEYSTONE.get_project = mock.Mock()
+        context.KEYSTONE.get_project.side_effect = self.get_project
+        req = self._get_http_request()
+        req.environ['nova.context'].project_id = self.B.id
+        self.default_subproject_quotas.update({
+            'instances': 10,
+            'cores': 10
+        })
+        body = {'quota_set': self.default_subproject_quotas}
+        self.assertRaises(webob.exc.HTTPForbidden,
+                          self.controller.update,
+                          req, self.B.id, body=body)
+       
+
+    def test_quotas_subproject_delete(self):
+        context.KEYSTONE.get_project = mock.Mock()
+        context.KEYSTONE.get_project.side_effect = self.get_project
+
+        req = self._get_http_request()
+        req.environ['nova.context'].project_id = self.A.id
+        self.mox.StubOutWithMock(quota.QUOTAS,
+                                 "destroy_all_by_project")
+        quota.QUOTAS.destroy_all_by_project(req.environ['nova.context'],
+                                            self.B.id)
+        self.mox.ReplayAll()
+        res = self.controller.delete(req, self.B.id)
+        self.mox.VerifyAll()
+        self.assertEqual(202, self.get_delete_status_int(res))
 
 
 class UserQuotasTestV2(UserQuotasTestV21):

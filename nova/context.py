@@ -22,6 +22,7 @@ import copy
 from keystoneclient import auth
 from keystoneclient import service_catalog
 from keystoneclient.v3 import client
+from oslo_config import cfg
 from oslo_context import context
 from oslo_log import log as logging
 from oslo_utils import timeutils
@@ -31,7 +32,7 @@ from nova import exception
 from nova.i18n import _, _LW
 from nova import policy
 
-
+CONF = cfg.CONF
 LOG = logging.getLogger(__name__)
 
 
@@ -225,8 +226,10 @@ class HierarchyInfo(context.RequestContext):
                                     context.service_catalog)
         token = plugin.get_token()
         for service in context.service_catalog:
-            if service.get('name') == 'keystone':
+            if service.get('type') == 'key-manager':
                 auth_url = service.get('links')['self']
+        if auth_url is None:
+            auth_url = 'http://localhost:5000/v3'
         auth_param = {"token": token, "auth_url": auth_url}
         return auth_param
 
@@ -243,7 +246,7 @@ class HierarchyInfo(context.RequestContext):
         token = auth_param.get("token")
         auth_url = auth_param.get("auth_url")
         keystone = client.Client(token=token, auth_url=auth_url,
-                                 project_id=project_id)
+                                 project_id=context.project_id)
         project = keystone.projects.get(project_id,
                                         subtree_as_ids=subtree)
         return project

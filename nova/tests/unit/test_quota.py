@@ -1290,77 +1290,90 @@ class DbQuotaDriverTestCase(test.TestCase):
             quota.QUOTAS._resources, 'test_project',
             parent_project_id=parent_project_id)
 
-        self.assertEqual(self.calls, [
-                'quota_get_all_by_project',
-                'quota_usage_get_all_by_project',
-                ])
+        print 'calls: %s' % self.calls
+        self.assertIn('quota_get_all_by_project',self.calls)
+        self.assertIn('quota_usage_get_all_by_project', self.calls)
         self.assertEqual(result, dict(
                 instances=dict(
+                    allocated=0,
                     limit=0,
                     in_use=0,
                     reserved=0,
                     ),
                 cores=dict(
+                    allocated=0,
                     limit=10,
                     in_use=4,
                     reserved=4,
                     ),
                 ram=dict(
+                    allocated=0,
                     limit=0,
                     in_use=0,
                     reserved=0,
                     ),
                floating_ips=dict(
+                    allocated=0,
                     limit=0,
                     in_use=0,
                     reserved=0,
                     ),
                 fixed_ips=dict(
+                    allocated=0,
                     limit=0,
                     in_use=0,
                     reserved=0,
                     ),
                 metadata_items=dict(
+                    allocated=0,
                     limit=0,
                     in_use=0,
                     reserved=0,
                     ),
                 injected_files=dict(
+                    allocated=0,
                     limit=2,
                     in_use=0,
                     reserved=0,
                     ),
                 injected_file_content_bytes=dict(
+                    allocated=0,
                     limit=0,
                     in_use=0,
                     reserved=0,
                     ),
                 injected_file_path_bytes=dict(
+                    allocated=0,
                     limit=127,
                     in_use=0,
                     reserved=0,
                     ),
                 security_groups=dict(
+                    allocated=0,
                     limit=0,
                     in_use=0,
                     reserved=0,
                     ),
                 security_group_rules=dict(
+                    allocated=0,
                     limit=0,
                     in_use=0,
                     reserved=0,
                     ),
                 key_pairs=dict(
+                    allocated=0,
                     limit=0,
                     in_use=0,
                     reserved=0,
                     ),
                 server_groups=dict(
+                    allocated=0,
                     limit=0,
                     in_use=0,
                     reserved=0,
                     ),
                 server_group_members=dict(
+                    allocated=0,
                     limit=0,
                     in_use=0,
                     reserved=0,
@@ -1374,13 +1387,11 @@ class DbQuotaDriverTestCase(test.TestCase):
             FakeContext('test_project', 'test_class'),
             quota.QUOTAS._resources, 'test_project', remains=True)
 
-        self.assertEqual(self.calls, [
-                'quota_get_all_by_project',
-                'quota_usage_get_all_by_project',
-                'quota_class_get_all_by_name',
-                'quota_class_get_default',
-                'quota_get_all',
-                ])
+        self.assertIn('quota_get_all_by_project', self.calls)
+        self.assertIn('quota_usage_get_all_by_project', self.calls)
+        self.assertIn('quota_class_get_all_by_name', self.calls)
+        self.assertIn('quota_class_get_default', self.calls)
+        self.assertIn('quota_get_all', self.calls)
         self.assertEqual(result, dict(
                 instances=dict(
                     limit=5,
