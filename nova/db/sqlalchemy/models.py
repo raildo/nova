@@ -172,6 +172,10 @@ class ComputeNode(BASE, NovaBase):
     # objects.NUMATopoloogy._to_json()
     numa_topology = Column(Text)
 
+    # allocation ratios provided by the RT
+    ram_allocation_ratio = Column(Float, nullable=True)
+    cpu_allocation_ratio = Column(Float, nullable=True)
+
 
 class Certificate(BASE, NovaBase):
     """Represents a x509 certificate."""
@@ -425,6 +429,11 @@ class Quota(BASE, NovaBase):
 
     resource = Column(String(255), nullable=False)
     hard_limit = Column(Integer)
+
+    # allocated is the sum of the quota hard_limit values of immediate child
+    # projects. It defaults to 0, since it will be zero till the parent project
+    # allocated a finite quota to its immediate child projects
+    allocated = Column(Integer, default=0)
 
 
 class ProjectUserQuota(BASE, NovaBase):
@@ -983,7 +992,9 @@ class InstanceMetadata(BASE, NovaBase):
 class InstanceSystemMetadata(BASE, NovaBase):
     """Represents a system-owned metadata key/value pair for an instance."""
     __tablename__ = 'instance_system_metadata'
-    __table_args__ = ()
+    __table_args__ = (
+        Index('instance_uuid', 'instance_uuid'),
+    )
     id = Column(Integer, primary_key=True)
     key = Column(String(255), nullable=False)
     value = Column(String(255))

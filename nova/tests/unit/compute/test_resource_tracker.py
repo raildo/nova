@@ -261,6 +261,8 @@ class BaseTestCase(test.TestCase):
             'updated_at': None,
             'deleted_at': None,
             'deleted': False,
+            'cpu_allocation_ratio': None,
+            'ram_allocation_ratio': None,
         }
         if values:
             compute.update(values)
@@ -830,84 +832,6 @@ class InstanceClaimTestCase(BaseTrackerTestCase):
 
     @mock.patch('nova.objects.InstancePCIRequests.get_by_instance_uuid',
                 return_value=objects.InstancePCIRequests(requests=[]))
-    def test_update_usage_only_for_tracked(self, mock_get):
-        flavor = self._fake_flavor_create()
-        claim_mem = flavor['memory_mb'] + FAKE_VIRT_MEMORY_OVERHEAD
-        claim_gb = flavor['root_gb'] + flavor['ephemeral_gb']
-        claim_topology = self._claim_topology(claim_mem / 2)
-
-        instance_topology = self._instance_topology(claim_mem / 2)
-
-        instance = self._fake_instance_obj(
-                flavor=flavor, task_state=None,
-                numa_topology=instance_topology)
-        self.tracker.update_usage(self.context, instance)
-
-        self._assert(0, 'memory_mb_used')
-        self._assert(0, 'local_gb_used')
-        self._assert(0, 'current_workload')
-        self._assert(FAKE_VIRT_NUMA_TOPOLOGY, 'numa_topology')
-
-        with mock.patch.object(instance, 'save'):
-            claim = self.tracker.instance_claim(self.context, instance,
-                                                self.limits)
-        self.assertNotEqual(0, claim.memory_mb)
-        self._assert(claim_mem, 'memory_mb_used')
-        self._assert(claim_gb, 'local_gb_used')
-        self._assert(claim_topology, 'numa_topology')
-
-        # now update should actually take effect
-        instance['task_state'] = task_states.SCHEDULING
-        self.tracker.update_usage(self.context, instance)
-
-        self._assert(claim_mem, 'memory_mb_used')
-        self._assert(claim_gb, 'local_gb_used')
-        self._assert(claim_topology, 'numa_topology')
-        self._assert(1, 'current_workload')
-
-    @mock.patch('nova.objects.InstancePCIRequests.get_by_instance_uuid',
-                return_value=objects.InstancePCIRequests(requests=[]))
-    def test_claim_and_abort(self, mock_get):
-        claim_mem = 3
-        claim_mem_total = 3 + FAKE_VIRT_MEMORY_OVERHEAD
-        claim_disk = 2
-        claim_topology = self._claim_topology(claim_mem_total / 2)
-
-        instance_topology = self._instance_topology(claim_mem_total / 2)
-        instance = self._fake_instance_obj(memory_mb=claim_mem,
-                root_gb=claim_disk, ephemeral_gb=0,
-                numa_topology=instance_topology)
-
-        with mock.patch.object(instance, 'save'):
-            claim = self.tracker.instance_claim(self.context, instance,
-                                                self.limits)
-        self.assertIsNotNone(claim)
-
-        self.assertEqual(claim_mem_total, self.compute["memory_mb_used"])
-        self.assertEqual(FAKE_VIRT_MEMORY_MB - claim_mem_total,
-                         self.compute["free_ram_mb"])
-        self.assertEqualNUMAHostTopology(
-                claim_topology, objects.NUMATopology.obj_from_db_obj(
-                    self.compute['numa_topology']))
-
-        self.assertEqual(claim_disk, self.compute["local_gb_used"])
-        self.assertEqual(FAKE_VIRT_LOCAL_GB - claim_disk,
-                         self.compute["free_disk_gb"])
-
-        claim.abort()
-
-        self.assertEqual(0, self.compute["memory_mb_used"])
-        self.assertEqual(FAKE_VIRT_MEMORY_MB, self.compute["free_ram_mb"])
-        self.assertEqualNUMAHostTopology(
-                FAKE_VIRT_NUMA_TOPOLOGY,
-                objects.NUMATopology.obj_from_db_obj(
-                    self.compute['numa_topology']))
-
-        self.assertEqual(0, self.compute["local_gb_used"])
-        self.assertEqual(FAKE_VIRT_LOCAL_GB, self.compute["free_disk_gb"])
-
-    @mock.patch('nova.objects.InstancePCIRequests.get_by_instance_uuid',
-                return_value=objects.InstancePCIRequests(requests=[]))
     def test_instance_claim_with_oversubscription(self, mock_get):
         memory_mb = FAKE_VIRT_MEMORY_MB * 2
         root_gb = ephemeral_gb = FAKE_VIRT_LOCAL_GB
@@ -1167,16 +1091,6 @@ class _MoveClaimTestCase(BaseTrackerTestCase):
 
     @mock.patch('nova.objects.InstancePCIRequests.get_by_instance_uuid',
                 return_value=objects.InstancePCIRequests(requests=[]))
-    def test_claim(self, mock_get):
-        self.claim_method(self.context, self.instance,
-                self.instance_type, limits=self.limits)
-        self._assert(FAKE_VIRT_MEMORY_WITH_OVERHEAD, 'memory_mb_used')
-        self._assert(FAKE_VIRT_LOCAL_GB, 'local_gb_used')
-        self._assert(FAKE_VIRT_VCPUS, 'vcpus_used')
-        self.assertEqual(1, len(self.tracker.tracked_migrations))
-
-    @mock.patch('nova.objects.InstancePCIRequests.get_by_instance_uuid',
-                return_value=objects.InstancePCIRequests(requests=[]))
     def test_abort(self, mock_get):
         try:
             with self.claim_method(self.context, self.instance,
@@ -1232,24 +1146,6 @@ class _MoveClaimTestCase(BaseTrackerTestCase):
         self._assert(0, 'local_gb_used')
         self._assert(0, 'vcpus_used')
         self.assertEqual(0, len(self.tracker.tracked_migrations))
-
-    def test_resize_filter(self):
-        instance = self._fake_instance_obj(vm_state=vm_states.ACTIVE,
-                task_state=task_states.SUSPENDING)
-        self.assertFalse(self.tracker._instance_in_resize_state(instance))
-
-        instance = self._fake_instance_obj(vm_state=vm_states.RESIZED,
-                task_state=task_states.SUSPENDING)
-        self.assertTrue(self.tracker._instance_in_resize_state(instance))
-
-        states = [task_states.RESIZE_PREP, task_states.RESIZE_MIGRATING,
-                  task_states.RESIZE_MIGRATED, task_states.RESIZE_FINISH]
-        for vm_state in [vm_states.ACTIVE, vm_states.STOPPED]:
-            for task_state in states:
-                instance = self._fake_instance_obj(vm_state=vm_state,
-                                                   task_state=task_state)
-                result = self.tracker._instance_in_resize_state(instance)
-                self.assertTrue(result)
 
     @mock.patch.object(objects.Migration, 'save')
     def test_existing_migration(self, save_mock):

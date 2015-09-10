@@ -73,6 +73,8 @@ _COMPUTE_NODE_FIXTURES = [
         extra_resources=None,
         stats={},
         numa_topology=None,
+        cpu_allocation_ratio=16.0,
+        ram_allocation_ratio=1.5,
         ),
 ]
 
@@ -817,6 +819,8 @@ class TestInitComputeNode(BaseTestCase):
         self._setup_rt()
 
         get_mock.side_effect = exc.NotFound
+        cpu_alloc_ratio = 1.0
+        ram_alloc_ratio = 1.0
 
         resources = {
             'host_ip': '1.1.1.1',
@@ -856,7 +860,14 @@ class TestInitComputeNode(BaseTestCase):
             hypervisor_hostname=resources['hypervisor_hostname'],
             # NOTE(sbauza): ResourceTracker adds host field
             host='fake-host',
+            # NOTE(sbauza): ResourceTracker adds CONF allocation ratios
+            ram_allocation_ratio=ram_alloc_ratio,
+            cpu_allocation_ratio=cpu_alloc_ratio,
         )
+
+        # Forcing the flags to the values we know
+        self.rt.ram_allocation_ratio = ram_alloc_ratio
+        self.rt.cpu_allocation_ratio = cpu_alloc_ratio
 
         self.rt._init_compute_node(mock.sentinel.ctx, resources)
 
@@ -866,6 +877,18 @@ class TestInitComputeNode(BaseTestCase):
         create_mock.assert_called_once_with()
         self.assertTrue(obj_base.obj_equal_prims(expected_compute,
                                                  self.rt.compute_node))
+
+    def test_copy_resources_adds_allocation_ratios(self):
+        self.flags(cpu_allocation_ratio=4.0, ram_allocation_ratio=3.0)
+        self._setup_rt()
+
+        resources = copy.deepcopy(_VIRT_DRIVER_AVAIL_RESOURCES)
+        compute_node = copy.deepcopy(_COMPUTE_NODE_FIXTURES[0])
+        self.rt.compute_node = compute_node
+
+        self.rt._copy_resources(resources)
+        self.assertEqual(4.0, self.rt.compute_node.cpu_allocation_ratio)
+        self.assertEqual(3.0, self.rt.compute_node.ram_allocation_ratio)
 
 
 class TestUpdateComputeNode(BaseTestCase):
@@ -895,7 +918,9 @@ class TestUpdateComputeNode(BaseTestCase):
             memory_mb=512,
             current_workload=0,
             vcpus=4,
-            running_vms=0
+            running_vms=0,
+            cpu_allocation_ratio=16.0,
+            ram_allocation_ratio=1.5,
         )
         self.rt.compute_node = compute
         self.rt._update(mock.sentinel.ctx)
@@ -940,7 +965,9 @@ class TestUpdateComputeNode(BaseTestCase):
             memory_mb=512,
             current_workload=0,
             vcpus=4,
-            running_vms=0
+            running_vms=0,
+            cpu_allocation_ratio=16.0,
+            ram_allocation_ratio=1.5,
         )
         expected_resources = copy.deepcopy(compute)
         expected_resources.stats = {}
@@ -1014,6 +1041,37 @@ class TestInstanceClaim(BaseTestCase):
 
     @mock.patch('nova.objects.InstancePCIRequests.get_by_instance_uuid')
     @mock.patch('nova.objects.MigrationList.get_in_progress_by_host_and_node')
+    def test_update_usage_with_claim(self, migr_mock, pci_mock):
+        # Test that RT.update_usage() only changes the compute node
+        # resources if there has been a claim first.
+        pci_mock.return_value = objects.InstancePCIRequests(requests=[])
+
+        expected = copy.deepcopy(_COMPUTE_NODE_FIXTURES[0])
+        self.rt.update_usage(self.ctx, self.instance)
+        self.assertTrue(obj_base.obj_equal_prims(expected,
+                                                 self.rt.compute_node))
+
+        disk_used = self.instance.root_gb + self.instance.ephemeral_gb
+        expected.update({
+            'local_gb_used': disk_used,
+            'memory_mb_used': self.instance.memory_mb,
+            'free_disk_gb': expected['local_gb'] - disk_used,
+            "free_ram_mb": expected['memory_mb'] - self.instance.memory_mb,
+            'running_vms': 1,
+            # vcpus are claimed by the ERT in RT._update(), which is mocked
+            # out below...
+            'vcpus_used': 0,
+            'pci_device_pools': objects.PciDevicePoolList(),
+        })
+        with mock.patch.object(self.rt, '_update') as update_mock:
+            with mock.patch.object(self.instance, 'save'):
+                self.rt.instance_claim(self.ctx, self.instance, None)
+            update_mock.assert_called_once_with(self.elevated)
+            self.assertTrue(obj_base.obj_equal_prims(expected,
+                                                     self.rt.compute_node))
+
+    @mock.patch('nova.objects.InstancePCIRequests.get_by_instance_uuid')
+    @mock.patch('nova.objects.MigrationList.get_in_progress_by_host_and_node')
     def test_claim(self, migr_mock, pci_mock):
         self.assertFalse(self.rt.disabled)
 
@@ -1027,7 +1085,9 @@ class TestInstanceClaim(BaseTestCase):
             'free_disk_gb': expected['local_gb'] - disk_used,
             "free_ram_mb": expected['memory_mb'] - self.instance.memory_mb,
             'running_vms': 1,
-            # 'vcpus_used': 0,  # vcpus are not claimed
+            # vcpus are claimed by the ERT in RT._update(), which is mocked
+            # out below...
+            'vcpus_used': 0,
             'pci_device_pools': objects.PciDevicePoolList(),
         })
         with mock.patch.object(self.rt, '_update') as update_mock:
@@ -1036,6 +1096,26 @@ class TestInstanceClaim(BaseTestCase):
             update_mock.assert_called_once_with(self.elevated)
             self.assertTrue(obj_base.obj_equal_prims(expected,
                                                      self.rt.compute_node))
+
+    @mock.patch('nova.objects.InstancePCIRequests.get_by_instance_uuid')
+    @mock.patch('nova.objects.MigrationList.get_in_progress_by_host_and_node')
+    def test_claim_abort(self, migr_mock, pci_mock):
+        pci_mock.return_value = objects.InstancePCIRequests(requests=[])
+        disk_used = self.instance.root_gb + self.instance.ephemeral_gb
+
+        with mock.patch.object(self.instance, 'save'):
+            claim = self.rt.instance_claim(self.ctx, self.instance, None)
+
+        self.assertEqual(disk_used, self.rt.compute_node.local_gb_used)
+        self.assertEqual(self.instance.memory_mb,
+                         self.rt.compute_node.memory_mb_used)
+        self.assertEqual(1, self.rt.compute_node.running_vms)
+
+        claim.abort()
+
+        self.assertEqual(0, self.rt.compute_node.local_gb_used)
+        self.assertEqual(0, self.rt.compute_node.memory_mb_used)
+        self.assertEqual(0, self.rt.compute_node.running_vms)
 
     @mock.patch('nova.objects.InstancePCIRequests.get_by_instance_uuid')
     @mock.patch('nova.objects.MigrationList.get_in_progress_by_host_and_node')
@@ -1271,3 +1351,25 @@ class TestMoveClaim(BaseTestCase):
         self.instance = _MIGRATION_INSTANCE_FIXTURES[migr_obj['instance_uuid']]
         self.audit(self.rt, [], [migr_obj, migr_obj], self.instance)
         self.assertEqual(1, len(self.rt.tracked_migrations))
+
+
+class TestInstanceInResizeState(test.NoDBTestCase):
+    def test_active_suspending(self):
+        instance = objects.Instance(vm_state=vm_states.ACTIVE,
+                                    task_state=task_states.SUSPENDING)
+        self.assertFalse(resource_tracker._instance_in_resize_state(instance))
+
+    def test_resized_suspending(self):
+        instance = objects.Instance(vm_state=vm_states.RESIZED,
+                                    task_state=task_states.SUSPENDING)
+        self.assertTrue(resource_tracker._instance_in_resize_state(instance))
+
+    def test_resized_resize_migrating(self):
+        instance = objects.Instance(vm_state=vm_states.RESIZED,
+                                    task_state=task_states.RESIZE_MIGRATING)
+        self.assertTrue(resource_tracker._instance_in_resize_state(instance))
+
+    def test_resized_resize_finish(self):
+        instance = objects.Instance(vm_state=vm_states.RESIZED,
+                                    task_state=task_states.RESIZE_FINISH)
+        self.assertTrue(resource_tracker._instance_in_resize_state(instance))

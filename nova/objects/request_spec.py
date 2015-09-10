@@ -23,7 +23,9 @@ from nova.objects import fields
 class RequestSpec(base.NovaObject):
     # Version 1.0: Initial version
     # Version 1.1: ImageMeta version 1.6
-    VERSION = '1.1'
+    # Version 1.2: SchedulerRetries version 1.1
+    # Version 1.3: InstanceGroup version 1.10
+    VERSION = '1.3'
 
     fields = {
         'id': fields.IntegerField(),
@@ -54,9 +56,9 @@ class RequestSpec(base.NovaObject):
         'numa_topology': [('1.0', '1.2')],
         'flavor': [('1.0', '1.1')],
         'pci_requests': [('1.0', '1.1')],
-        'retry': [('1.0', '1.0')],
+        'retry': [('1.0', '1.0'), ('1.2', '1.1')],
         'limits': [('1.0', '1.0')],
-        'instance_group': [('1.0', '1.9')],
+        'instance_group': [('1.0', '1.9'), ('1.3', '1.10')],
     }
 
     @property
@@ -139,9 +141,11 @@ class RequestSpec(base.NovaObject):
             # Old-style group information having ugly dict keys containing sets
             # NOTE(sbauza): Can be dropped once select_destinations is removed
             policies = list(filter_properties.get('group_policies'))
-            members = list(filter_properties.get('group_hosts'))
+            hosts = list(filter_properties.get('group_hosts'))
             self.instance_group = objects.InstanceGroup(policies=policies,
-                                                        members=members)
+                                                        hosts=hosts)
+            # hosts has to be not part of the updates for saving the object
+            self.instance_group.obj_reset_changes(['hosts'])
         else:
             # Set the value anyway to avoid any call to obj_attr_is_set for it
             self.instance_group = None
@@ -212,11 +216,95 @@ class RequestSpec(base.NovaObject):
         return (hint_val[0] if isinstance(hint_val, list)
                 and len(hint_val) == 1 else hint_val)
 
+    def _to_legacy_image(self):
+        return base.obj_to_primitive(self.image) if (
+            self.obj_attr_is_set('image') and self.image) else {}
+
+    def _to_legacy_instance(self):
+        # NOTE(sbauza): Since the RequestSpec only persists a few Instance
+        # fields, we can only return a dict.
+        instance = {}
+        instance_fields = ['numa_topology', 'pci_requests',
+                           'project_id', 'availability_zone', 'instance_uuid']
+        for field in instance_fields:
+            if not self.obj_attr_is_set(field):
+                continue
+            if field == 'instance_uuid':
+                instance['uuid'] = getattr(self, field)
+            else:
+                instance[field] = getattr(self, field)
+        flavor_fields = ['root_gb', 'ephemeral_gb', 'memory_mb', 'vcpus']
+        if not self.obj_attr_is_set('flavor'):
+            return instance
+        for field in flavor_fields:
+            instance[field] = getattr(self.flavor, field)
+        return instance
+
+    def _to_legacy_group_info(self):
+        # NOTE(sbauza): Since this is only needed until the AffinityFilters are
+        # modified by using directly the RequestSpec object, we need to keep
+        # the existing dictionary as a primitive.
+        return {'group_updated': True,
+                'group_hosts': set(self.instance_group.hosts),
+                'group_policies': set(self.instance_group.policies)}
+
+    def to_legacy_request_spec_dict(self):
+        """Returns a legacy request_spec dict from the RequestSpec object.
+
+        Since we need to manage backwards compatibility and rolling upgrades
+        within our RPC API, we need to accept to provide an helper for
+        primitiving the right RequestSpec object into a legacy dict until we
+        drop support for old Scheduler RPC API versions.
+        If you don't understand why this method is needed, please don't use it.
+        """
+        req_spec = {}
+        if not self.obj_attr_is_set('num_instances'):
+            req_spec['num_instances'] = self.fields['num_instances'].default
+        else:
+            req_spec['num_instances'] = self.num_instances
+        req_spec['image'] = self._to_legacy_image()
+        req_spec['instance_properties'] = self._to_legacy_instance()
+        if self.obj_attr_is_set('flavor'):
+            req_spec['instance_type'] = self.flavor
+        else:
+            req_spec['instance_type'] = {}
+        return req_spec
+
+    def to_legacy_filter_properties_dict(self):
+        """Returns a legacy filter_properties dict from the RequestSpec object.
+
+        Since we need to manage backwards compatibility and rolling upgrades
+        within our RPC API, we need to accept to provide an helper for
+        primitiving the right RequestSpec object into a legacy dict until we
+        drop support for old Scheduler RPC API versions.
+        If you don't understand why this method is needed, please don't use it.
+        """
+        filt_props = {}
+        if self.obj_attr_is_set('ignore_hosts') and self.ignore_hosts:
+            filt_props['ignore_hosts'] = self.ignore_hosts
+        if self.obj_attr_is_set('force_hosts') and self.force_hosts:
+            filt_props['force_hosts'] = self.force_hosts
+        if self.obj_attr_is_set('force_nodes') and self.force_nodes:
+            filt_props['force_nodes'] = self.force_nodes
+        if self.obj_attr_is_set('retry') and self.retry:
+            filt_props['retry'] = self.retry.to_dict()
+        if self.obj_attr_is_set('limits') and self.limits:
+            filt_props['limits'] = self.limits.to_dict()
+        if self.obj_attr_is_set('instance_group') and self.instance_group:
+            filt_props.update(self._to_legacy_group_info())
+        if self.obj_attr_is_set('scheduler_hints') and self.scheduler_hints:
+            # NOTE(sbauza): We need to backport all the hints correctly since
+            # we had to hydrate the field by putting a single item into a list.
+            filt_props['scheduler_hints'] = {hint: self.get_scheduler_hint(
+                hint) for hint in self.scheduler_hints}
+        return filt_props
+
 
 @base.NovaObjectRegistry.register
 class SchedulerRetries(base.NovaObject):
     # Version 1.0: Initial version
-    VERSION = '1.0'
+    # Version 1.1: ComputeNodeList version 1.14
+    VERSION = '1.1'
 
     fields = {
         'num_attempts': fields.IntegerField(),
@@ -226,7 +314,7 @@ class SchedulerRetries(base.NovaObject):
     }
 
     obj_relationships = {
-        'hosts': [('1.0', '1.13')],
+        'hosts': [('1.0', '1.13'), ('1.1', '1.14')],
     }
 
     @classmethod
@@ -245,6 +333,11 @@ class SchedulerRetries(base.NovaObject):
                     for host, node in retry_dict.get('hosts')]
         retry_obj.hosts = objects.ComputeNodeList(objects=computes)
         return retry_obj
+
+    def to_dict(self):
+        legacy_hosts = [[cn.host, cn.hypervisor_hostname] for cn in self.hosts]
+        return {'num_attempts': self.num_attempts,
+                'hosts': legacy_hosts}
 
 
 @base.NovaObjectRegistry.register
@@ -273,4 +366,11 @@ class SchedulerLimits(base.NovaObject):
         # Here we accept that the object is always generated from a primitive
         # hence the use of obj_set_defaults exceptionally.
         limits.obj_set_defaults()
+        return limits
+
+    def to_dict(self):
+        limits = {}
+        for field in self.fields:
+            if getattr(self, field) is not None:
+                limits[field] = getattr(self, field)
         return limits

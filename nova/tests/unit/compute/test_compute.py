@@ -193,6 +193,8 @@ class BaseTestCase(test.TestCase):
                                    'numa_topology': '',
                                    'id': 2,
                                    'host': 'fake_phyp1',
+                                   'cpu_allocation_ratio': 16.0,
+                                   'ram_allocation_ratio': 1.5,
                                    'host_ip': '127.0.0.1'}]
             return [objects.ComputeNode._from_db_object(
                         context, objects.ComputeNode(), cn)
@@ -6238,7 +6240,9 @@ class ComputeTestCase(BaseTestCase):
         val = self.compute._running_deleted_instances(admin_context)
         self.assertEqual(val, [instance])
 
-    def _heal_instance_info_cache(self, _get_instance_nw_info_raise=False):
+    def _heal_instance_info_cache(self,
+                                  _get_instance_nw_info_raise=False,
+                                  _get_instance_nw_info_raise_cache=False):
         # Update on every call for the test
         self.flags(heal_instance_info_cache_interval=-1)
         ctxt = context.get_admin_context()
@@ -6281,6 +6285,9 @@ class ComputeTestCase(BaseTestCase):
             call_info['get_nw_info'] += 1
             if _get_instance_nw_info_raise:
                 raise exception.InstanceNotFound(instance_id=instance['uuid'])
+            if _get_instance_nw_info_raise_cache:
+                raise exception.InstanceInfoCacheNotFound(
+                                                instance_uuid=instance['uuid'])
 
         self.stubs.Set(db, 'instance_get_all_by_host',
                 fake_instance_get_all_by_host)
@@ -6337,8 +6344,11 @@ class ComputeTestCase(BaseTestCase):
     def test_heal_instance_info_cache(self):
         self._heal_instance_info_cache()
 
-    def test_heal_instance_info_cache_with_exception(self):
+    def test_heal_instance_info_cache_with_instance_exception(self):
         self._heal_instance_info_cache(_get_instance_nw_info_raise=True)
+
+    def test_heal_instance_info_cache_with_info_cache_exception(self):
+        self._heal_instance_info_cache(_get_instance_nw_info_raise_cache=True)
 
     @mock.patch('nova.objects.InstanceList.get_by_filters')
     @mock.patch('nova.compute.api.API.unrescue')
@@ -6570,21 +6580,22 @@ class ComputeTestCase(BaseTestCase):
                           self.compute._get_resource_tracker,
                           'invalidnodename')
 
-    def test_instance_update_host_check(self):
+    @mock.patch.object(objects.Instance, 'save')
+    def test_instance_update_host_check(self, mock_save):
         # make sure rt usage doesn't happen if the host or node is different
         def fail_get(nodename):
             raise test.TestingException("wrong host/node")
         self.stubs.Set(self.compute, '_get_resource_tracker', fail_get)
 
         instance = self._create_fake_instance_obj({'host': 'someotherhost'})
-        self.compute._instance_update(self.context, instance.uuid, vcpus=4)
+        self.compute._instance_update(self.context, instance, vcpus=4)
 
         instance = self._create_fake_instance_obj({'node': 'someothernode'})
-        self.compute._instance_update(self.context, instance.uuid, vcpus=4)
+        self.compute._instance_update(self.context, instance, vcpus=4)
 
         params = {'host': 'someotherhost', 'node': 'someothernode'}
         instance = self._create_fake_instance_obj(params)
-        self.compute._instance_update(self.context, instance.uuid, vcpus=4)
+        self.compute._instance_update(self.context, instance, vcpus=4)
 
     @mock.patch('nova.objects.MigrationList.get_by_filters')
     @mock.patch('nova.objects.Migration.save')
@@ -7411,7 +7422,7 @@ class ComputeAPITestCase(BaseTestCase):
         self.fake_image['min_disk'] = 2
         self.stubs.Set(fake_image._FakeImageService, 'show', self.fake_show)
 
-        self.assertRaises(exception.FlavorDiskTooSmall,
+        self.assertRaises(exception.FlavorDiskSmallerThanMinDisk,
             self.compute_api.create, self.context,
             inst_type, self.fake_image['id'])
 
@@ -7430,7 +7441,7 @@ class ComputeAPITestCase(BaseTestCase):
 
         self.stubs.Set(fake_image._FakeImageService, 'show', self.fake_show)
 
-        self.assertRaises(exception.FlavorDiskTooSmall,
+        self.assertRaises(exception.FlavorDiskSmallerThanImage,
             self.compute_api.create, self.context,
             inst_type, self.fake_image['id'])
 
@@ -7685,6 +7696,8 @@ class ComputeAPITestCase(BaseTestCase):
 
         group = objects.InstanceGroup(self.context)
         group.uuid = str(uuid.uuid4())
+        group.project_id = self.context.project_id
+        group.user_id = self.context.user_id
         group.create()
 
         inst_type = flavors.get_default_flavor()
@@ -7872,7 +7885,7 @@ class ComputeAPITestCase(BaseTestCase):
         self.fake_image['min_disk'] = 2
         self.stubs.Set(fake_image._FakeImageService, 'show', self.fake_show)
 
-        self.assertRaises(exception.FlavorDiskTooSmall,
+        self.assertRaises(exception.FlavorDiskSmallerThanMinDisk,
             self.compute_api.rebuild, self.context,
             instance, self.fake_image['id'], 'new_password')
 
@@ -7941,7 +7954,7 @@ class ComputeAPITestCase(BaseTestCase):
         self.fake_image['size'] = '1073741825'
         self.stubs.Set(fake_image._FakeImageService, 'show', self.fake_show)
 
-        self.assertRaises(exception.FlavorDiskTooSmall,
+        self.assertRaises(exception.FlavorDiskSmallerThanImage,
             self.compute_api.rebuild, self.context,
             instance, self.fake_image['id'], 'new_password')
 
@@ -9072,7 +9085,7 @@ class ComputeAPITestCase(BaseTestCase):
         params = {'vm_state': vm_states.RESCUED}
         instance = self._create_fake_instance_obj(params=params)
 
-        volume = {'id': 1, 'attach_status': 'in-use',
+        volume = {'id': 1, 'attach_status': 'attached',
                   'instance_uuid': instance['uuid']}
 
         self.assertRaises(exception.InstanceInvalidState,
@@ -9514,7 +9527,8 @@ class ComputeAPITestCase(BaseTestCase):
         # Ensure volume can be detached from instance
         called = {}
         instance = self._create_fake_instance_obj()
-        volume = {'id': 1, 'attach_status': 'in-use',
+        # Set attach_status to 'fake' as nothing is reading the value.
+        volume = {'id': 1, 'attach_status': 'fake',
                   'instance_uuid': instance['uuid']}
 
         def fake_check_detach(*args, **kwargs):
@@ -9558,7 +9572,7 @@ class ComputeAPITestCase(BaseTestCase):
                     'launched_at': timeutils.utcnow(),
                     'vm_state': vm_states.ACTIVE,
                     'task_state': None})
-        volume = {'id': 1, 'attach_status': 'in-use',
+        volume = {'id': 1, 'attach_status': 'attached',
                   'instance_uuid': 'uuid2'}
 
         self.assertRaises(exception.VolumeUnattached,
@@ -9571,8 +9585,8 @@ class ComputeAPITestCase(BaseTestCase):
                     'launched_at': timeutils.utcnow(),
                     'vm_state': vm_states.SUSPENDED,
                     'task_state': None})
-        volume = {'id': 1, 'attach_status': 'in-use',
-                  'instance_uuid': 'uuid2'}
+        # Unused
+        volume = {}
 
         self.assertRaises(exception.InstanceInvalidState,
                           self.compute_api.detach_volume, self.context,
@@ -11097,11 +11111,8 @@ class ComputeInactiveImageTestCase(BaseTestCase):
         super(ComputeInactiveImageTestCase, self).setUp()
 
         def fake_show(meh, context, id, **kwargs):
-            return {'id': id, 'min_disk': None, 'min_ram': None,
-                    'name': 'fake_name',
-                    'status': 'deleted',
-                    'min_ram': 0,
-                    'min_disk': 0,
+            return {'id': id, 'name': 'fake_name', 'status': 'deleted',
+                    'min_ram': 0, 'min_disk': 0,
                     'properties': {'kernel_id': 'fake_kernel_id',
                                    'ramdisk_id': 'fake_ramdisk_id',
                                    'something_else': 'meow'}}
@@ -11501,7 +11512,7 @@ class CheckRequestedImageTestCase(test.TestCase):
     def test_image_min_disk_check(self):
         image = dict(id='123', status='active', min_disk='2')
 
-        self.assertRaises(exception.FlavorDiskTooSmall,
+        self.assertRaises(exception.FlavorDiskSmallerThanMinDisk,
                 self.compute_api._check_requested_image, self.context,
                 image['id'], image, self.instance_type, None)
 
@@ -11512,7 +11523,7 @@ class CheckRequestedImageTestCase(test.TestCase):
     def test_image_too_large(self):
         image = dict(id='123', status='active', size='1073741825')
 
-        self.assertRaises(exception.FlavorDiskTooSmall,
+        self.assertRaises(exception.FlavorDiskSmallerThanImage,
                 self.compute_api._check_requested_image, self.context,
                 image['id'], image, self.instance_type, None)
 
@@ -11580,7 +11591,7 @@ class CheckRequestedImageTestCase(test.TestCase):
             image_id=image_uuid, volume_id=volume_uuid,
             volume_size=self.instance_type.root_gb)
 
-        self.assertRaises(exception.FlavorDiskTooSmall,
+        self.assertRaises(exception.VolumeSmallerThanMinDisk,
                           self.compute_api._check_requested_image,
                           self.context, image_uuid, image, self.instance_type,
                           root_bdm)
@@ -11624,7 +11635,7 @@ class CheckRequestedImageTestCase(test.TestCase):
         root_bdm = block_device_obj.BlockDeviceMapping(
             source_type='image', destination_type='local', image_id=image_uuid)
 
-        self.assertRaises(exception.FlavorDiskTooSmall,
+        self.assertRaises(exception.FlavorDiskSmallerThanImage,
                           self.compute_api._check_requested_image,
                           self.context, image['id'],
                           image, self.instance_type, root_bdm)
@@ -11639,7 +11650,7 @@ class CheckRequestedImageTestCase(test.TestCase):
         root_bdm = block_device_obj.BlockDeviceMapping(
             source_type='image', destination_type='local', image_id=image_uuid)
 
-        self.assertRaises(exception.FlavorDiskTooSmall,
+        self.assertRaises(exception.FlavorDiskSmallerThanMinDisk,
                           self.compute_api._check_requested_image,
                           self.context, image['id'],
                           image, self.instance_type, root_bdm)

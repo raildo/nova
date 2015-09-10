@@ -705,10 +705,8 @@ class API(base.Base):
                 dest_size *= units.Gi
 
                 if image_min_disk > dest_size:
-                    # TODO(mdbooth) Raise a more descriptive exception here.
-                    # This is the exception which calling code expects, but
-                    # it's potentially misleading to the user.
-                    raise exception.FlavorDiskTooSmall()
+                    raise exception.VolumeSmallerThanMinDisk(
+                        volume_size=dest_size, image_min_disk=image_min_disk)
 
         # Target disk is a local disk whose size is taken from the flavor
         else:
@@ -719,10 +717,12 @@ class API(base.Base):
             # drivers. A value of 0 means don't check size.
             if dest_size != 0:
                 if image_size > dest_size:
-                    raise exception.FlavorDiskTooSmall()
+                    raise exception.FlavorDiskSmallerThanImage(
+                        flavor_size=dest_size, image_size=image_size)
 
                 if image_min_disk > dest_size:
-                    raise exception.FlavorDiskTooSmall()
+                    raise exception.FlavorDiskSmallerThanMinDisk(
+                        flavor_size=dest_size, image_min_disk=image_min_disk)
 
     def _get_image_defined_bdms(self, base_options, instance_type, image_meta,
                                 root_device_name):
@@ -966,15 +966,13 @@ class API(base.Base):
         return base_options, max_network_count
 
     def _build_filter_properties(self, context, scheduler_hints, forced_host,
-            forced_node, instance_type, pci_request_info):
+            forced_node, instance_type):
         filter_properties = dict(scheduler_hints=scheduler_hints)
         filter_properties['instance_type'] = instance_type
         if forced_host:
             filter_properties['force_hosts'] = [forced_host]
         if forced_node:
             filter_properties['force_nodes'] = [forced_node]
-        if pci_request_info and pci_request_info.requests:
-            filter_properties['pci_requests'] = pci_request_info
         return filter_properties
 
     def _provision_instances(self, context, instance_type, min_count,
@@ -1185,8 +1183,7 @@ class API(base.Base):
 
         filter_properties = self._build_filter_properties(context,
                 scheduler_hints, forced_host,
-                forced_node, instance_type,
-                base_options.get('pci_requests'))
+                forced_node, instance_type)
 
         for instance in instances:
             self._record_action_start(context, instance,

@@ -181,9 +181,8 @@ class RPCAllocateFixedIP(object):
                 host = network['host']
             # NOTE(vish): if there is no network host, set one
             if host is None:
-                network_p = obj_base.obj_to_primitive(network)
                 host = self.network_rpcapi.set_network_host(context,
-                                                            network_p)
+                                                            network)
             if host != self.host:
                 # need to call allocate_fixed_ip to correct network host
                 green_threads.append(eventlet.spawn(
@@ -251,7 +250,7 @@ class NetworkManager(manager.Manager):
         The one at a time part is to flatten the layout to help scale
     """
 
-    target = messaging.Target(version='1.14')
+    target = messaging.Target(version='1.15')
 
     # If True, this manager requires VIF to create a bridge.
     SHOULD_CREATE_BRIDGE = False
@@ -352,11 +351,13 @@ class NetworkManager(manager.Manager):
 
     def set_network_host(self, context, network_ref):
         """Safely sets the host of the network."""
+        # TODO(mriedem): Remove this compat shim when network RPC API version
+        # 1.0 is dropped.
         if not isinstance(network_ref, obj_base.NovaObject):
             network_ref = objects.Network._from_db_object(
                 context, objects.Network(), network_ref)
         LOG.debug('Setting host %s for network %s', self.host,
-                  network_ref['uuid'], context=context)
+                  network_ref.uuid, context=context)
         network_ref.host = self.host
         network_ref.save()
         return self.host
@@ -1129,15 +1130,28 @@ class NetworkManager(manager.Manager):
             # should ignore the request so we don't disassociate the fixed IP
             # from the wrong instance.
             if mac:
+                LOG.debug('Checking to see if virtual interface with MAC '
+                          '%(mac)s is still associated to instance.',
+                          {'mac': mac}, instance_uuid=fixed_ip.instance_uuid)
                 vif = objects.VirtualInterface.get_by_address(context, mac)
-                if vif and vif.instance_uuid != fixed_ip.instance_uuid:
-                    LOG.info(_LI("Ignoring request to release fixed IP "
-                                 "%(address)s with MAC %(mac)s since it is "
-                                 "now associated with a new instance that is "
-                                 "in the process of allocating it's network."),
-                             {'address': address, 'mac': mac},
-                             instance_uuid=fixed_ip.instance_uuid)
-                    return
+                if vif:
+                    LOG.debug('Found VIF: %s', vif,
+                              instance_uuid=fixed_ip.instance_uuid)
+                    if vif.instance_uuid != fixed_ip.instance_uuid:
+                        LOG.info(_LI("Ignoring request to release fixed IP "
+                                     "%(address)s with MAC %(mac)s since it "
+                                     "is now associated with a new instance "
+                                     "that is in the process of allocating "
+                                     "it's network."),
+                                 {'address': address, 'mac': mac},
+                                 instance_uuid=fixed_ip.instance_uuid)
+                        return
+                else:
+                    LOG.debug('No VIF was found for MAC: %s', mac,
+                              instance_uuid=fixed_ip.instance_uuid)
+
+            LOG.debug('Disassociating fixed IP %s from instance.', address,
+                      instance_uuid=fixed_ip.instance_uuid)
             fixed_ip.disassociate()
 
     @staticmethod

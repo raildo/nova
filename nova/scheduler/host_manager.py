@@ -32,8 +32,6 @@ from oslo_log import log as logging
 from oslo_utils import timeutils
 import six
 
-from nova.compute import task_states
-from nova.compute import vm_states
 from nova import context as context_module
 from nova import exception
 from nova.i18n import _LI, _LW
@@ -184,6 +182,10 @@ class HostState(object):
         # Instances on this host
         self.instances = {}
 
+        # Allocation ratios for this host
+        self.ram_allocation_ratio = None
+        self.cpu_allocation_ratio = None
+
         self.updated = None
         if compute:
             self.update_from_compute_node(compute)
@@ -251,6 +253,10 @@ class HostState(object):
         # update metrics
         self.metrics = objects.MonitorMetricList.from_json(compute.metrics)
 
+        # update allocation ratios given by the ComputeNode object
+        self.cpu_allocation_ratio = compute.cpu_allocation_ratio
+        self.ram_allocation_ratio = compute.ram_allocation_ratio
+
     @set_update_time_on_success
     def consume_from_instance(self, instance):
         """Incrementally update host state from an instance."""
@@ -265,12 +271,7 @@ class HostState(object):
         self.num_instances += 1
 
         pci_requests = instance.get('pci_requests')
-        # NOTE(danms): Instance here is still a dict, which is converted from
-        # an object. The pci_requests are a dict as well. Convert this when
-        # we get an object all the way to this path.
-        if pci_requests and pci_requests['requests'] and self.pci_stats:
-            pci_requests = objects.InstancePCIRequests \
-                .from_request_spec_instance_props(pci_requests)
+        if pci_requests and self.pci_stats:
             pci_requests = pci_requests.requests
         else:
             pci_requests = None
@@ -294,14 +295,10 @@ class HostState(object):
         self.numa_topology = hardware.get_host_numa_usage_from_instance(
                 self, instance)
 
-        vm_state = instance.get('vm_state', vm_states.BUILDING)
-        task_state = instance.get('task_state')
-        if vm_state == vm_states.BUILDING or task_state in [
-                task_states.RESIZE_MIGRATING, task_states.REBUILDING,
-                task_states.RESIZE_PREP, task_states.IMAGE_SNAPSHOT,
-                task_states.IMAGE_BACKUP, task_states.UNSHELVING,
-                task_states.RESCUING]:
-            self.num_io_ops += 1
+        # NOTE(sbauza): By considering all cases when the scheduler is called
+        # and when consume_from_instance() is run, we can safely say that there
+        # is always an IO operation because we want to move the instance
+        self.num_io_ops += 1
 
     def __repr__(self):
         return ("(%s, %s) ram:%s disk:%s io_ops:%s instances:%s" %
