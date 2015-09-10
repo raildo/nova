@@ -98,8 +98,6 @@ class MultiNodeComputeTestCase(BaseTestCase):
                                    'stats': '',
                                    'id': 2,
                                    'host': 'fake_phyp1',
-                                   'cpu_allocation_ratio': None,
-                                   'ram_allocation_ratio': None,
                                    'host_ip': '127.0.0.1'}]
             return [objects.ComputeNode._from_db_object(
                         context, objects.ComputeNode(), cn)

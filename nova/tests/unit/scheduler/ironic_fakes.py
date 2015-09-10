@@ -32,8 +32,7 @@ COMPUTE_NODES = [
                        cpu_arch='i386'),
             supported_hv_specs=[objects.HVSpec.from_list(
                 ["i386", "baremetal", "baremetal"])],
-            free_disk_gb=10, free_ram_mb=1024,
-            cpu_allocation_ratio=16.0, ram_allocation_ratio=1.5),
+            free_disk_gb=10, free_ram_mb=1024),
         objects.ComputeNode(
             id=2, local_gb=20, memory_mb=2048, vcpus=1,
             vcpus_used=0, local_gb_used=0, memory_mb_used=0,
@@ -46,8 +45,7 @@ COMPUTE_NODES = [
                        cpu_arch='i386'),
             supported_hv_specs=[objects.HVSpec.from_list(
                 ["i386", "baremetal", "baremetal"])],
-            free_disk_gb=20, free_ram_mb=2048,
-            cpu_allocation_ratio=16.0, ram_allocation_ratio=1.5),
+            free_disk_gb=20, free_ram_mb=2048),
         objects.ComputeNode(
             id=3, local_gb=30, memory_mb=3072, vcpus=1,
             vcpus_used=0, local_gb_used=0, memory_mb_used=0,
@@ -60,8 +58,7 @@ COMPUTE_NODES = [
                        cpu_arch='i386'),
             supported_hv_specs=[objects.HVSpec.from_list(
                 ["i386", "baremetal", "baremetal"])],
-            free_disk_gb=30, free_ram_mb=3072,
-            cpu_allocation_ratio=16.0, ram_allocation_ratio=1.5),
+            free_disk_gb=30, free_ram_mb=3072),
         objects.ComputeNode(
             id=4, local_gb=40, memory_mb=4096, vcpus=1,
             vcpus_used=0, local_gb_used=0, memory_mb_used=0,
@@ -74,8 +71,7 @@ COMPUTE_NODES = [
                        cpu_arch='i386'),
             supported_hv_specs=[objects.HVSpec.from_list(
                 ["i386", "baremetal", "baremetal"])],
-            free_disk_gb=40, free_ram_mb=4096,
-            cpu_allocation_ratio=16.0, ram_allocation_ratio=1.5),
+            free_disk_gb=40, free_ram_mb=4096),
         # Broken entry
         objects.ComputeNode(
             id=5, local_gb=50, memory_mb=5120, vcpus=1,

@@ -57,8 +57,7 @@ class BlockDeviceMapping(base.NovaPersistentObject, base.NovaObject,
     # Version 1.12: Changed device_type field to BlockDeviceTypeField.
     # Version 1.13: Instance version 1.21
     # Version 1.14: Instance version 1.22
-    # Version 1.15: Instance version 1.23
-    VERSION = '1.15'
+    VERSION = '1.14'
 
     fields = {
         'id': fields.IntegerField(),
@@ -85,7 +84,7 @@ class BlockDeviceMapping(base.NovaPersistentObject, base.NovaObject,
         'instance': [('1.0', '1.13'), ('1.2', '1.14'), ('1.3', '1.15'),
                      ('1.4', '1.16'), ('1.5', '1.17'), ('1.6', '1.18'),
                      ('1.8', '1.19'), ('1.9', '1.20'), ('1.13', '1.21'),
-                     ('1.14', '1.22'), ('1.15', '1.23')],
+                     ('1.14', '1.22')],
     }
 
     @staticmethod
@@ -191,16 +190,8 @@ class BlockDeviceMapping(base.NovaPersistentObject, base.NovaObject,
         self._from_db_object(self._context, self, updated)
         cell_type = cells_opts.get_cell_type()
         if cell_type == 'compute':
-            create = False
-            # NOTE(alaski): If the device name has just been set this bdm
-            # likely does not exist in the parent cell and we should create it.
-            # If this is a modification of the device name we should update
-            # rather than create which is why None is used here instead of True
-            if 'device_name' in updates:
-                create = None
             cells_api = cells_rpcapi.CellsAPI()
-            cells_api.bdm_update_or_create_at_top(self._context, self,
-                    create=create)
+            cells_api.bdm_update_or_create_at_top(self._context, self)
 
     @base.remotable_classmethod
     def get_by_volume_id(cls, context, volume_id,
@@ -273,8 +264,7 @@ class BlockDeviceMappingList(base.ObjectListBase, base.NovaObject):
     # Version 1.13: BlockDeviceMapping <= version 1.12
     # Version 1.14: BlockDeviceMapping <= version 1.13
     # Version 1.15: BlockDeviceMapping <= version 1.14
-    # Version 1.16: BlockDeviceMapping <= version 1.15
-    VERSION = '1.16'
+    VERSION = '1.15'
 
     fields = {
         'objects': fields.ListOfObjectsField('BlockDeviceMapping'),
@@ -285,7 +275,7 @@ class BlockDeviceMappingList(base.ObjectListBase, base.NovaObject):
                     ('1.6', '1.5'), ('1.7', '1.6'), ('1.8', '1.7'),
                     ('1.9', '1.8'), ('1.10', '1.9'), ('1.11', '1.10'),
                     ('1.12', '1.11'), ('1.13', '1.12'), ('1.14', '1.13'),
-                    ('1.15', '1.14'), ('1.16', '1.15')],
+                    ('1.15', '1.14')],
     }
 
     @base.remotable_classmethod

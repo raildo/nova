@@ -783,8 +783,7 @@ class HostStateTestCase(test.NoDBTestCase):
             hypervisor_hostname='hostname', cpu_info='cpu_info',
             supported_hv_specs=[],
             hypervisor_version=hyper_ver_int, numa_topology=None,
-            pci_device_pools=None, metrics=None,
-            cpu_allocation_ratio=16.0, ram_allocation_ratio=1.5)
+            pci_device_pools=None, metrics=None)
 
         host = host_manager.HostState("fakehost", "fakenode")
         host.update_from_compute_node(compute)
@@ -824,8 +823,7 @@ class HostStateTestCase(test.NoDBTestCase):
             hypervisor_hostname='hostname', cpu_info='cpu_info',
             supported_hv_specs=[],
             hypervisor_version=hyper_ver_int, numa_topology=None,
-            pci_device_pools=None, metrics=None,
-            cpu_allocation_ratio=16.0, ram_allocation_ratio=1.5)
+            pci_device_pools=None, metrics=None)
 
         host = host_manager.HostState("fakehost", "fakenode")
         host.update_from_compute_node(compute)
@@ -856,8 +854,7 @@ class HostStateTestCase(test.NoDBTestCase):
             hypervisor_hostname='hostname', cpu_info='cpu_info',
             supported_hv_specs=[],
             hypervisor_version=hyper_ver_int, numa_topology=None,
-            pci_device_pools=None, metrics=None,
-            cpu_allocation_ratio=16.0, ram_allocation_ratio=1.5)
+            pci_device_pools=None, metrics=None)
 
         host = host_manager.HostState("fakehost", "fakenode")
         host.update_from_compute_node(compute)
@@ -902,8 +899,8 @@ class HostStateTestCase(test.NoDBTestCase):
         self.assertIsNotNone(host.updated)
 
         instance = dict(root_gb=0, ephemeral_gb=0, memory_mb=0, vcpus=0,
-                        project_id='12345', vm_state=vm_states.ACTIVE,
-                        task_state=task_states.RESIZE_PREP, os_type='Linux',
+                        project_id='12345', vm_state=vm_states.PAUSED,
+                        task_state=None, os_type='Linux',
                         uuid='fake-uuid',
                         numa_topology=fake_numa_topology)
         numa_usage_mock.return_value = 'fake-consumed-twice'
@@ -912,7 +909,7 @@ class HostStateTestCase(test.NoDBTestCase):
         self.assertEqual('fake-fitted-twice', instance['numa_topology'])
 
         self.assertEqual(2, host.num_instances)
-        self.assertEqual(2, host.num_io_ops)
+        self.assertEqual(1, host.num_io_ops)
         self.assertEqual(2, numa_usage_mock.call_count)
         self.assertEqual(((host, instance),), numa_usage_mock.call_args)
         self.assertEqual('fake-consumed-twice', host.numa_topology)
@@ -947,8 +944,6 @@ class HostStateTestCase(test.NoDBTestCase):
                                                              ephemeral_gb=0,
                                                              memory_mb=1024,
                                                              vcpus=1))
-        # NOTE(sbauza): FilterSchedule._schedule() rehydrates pci_requests
-        req_spec['instance_properties']['pci_requests'] = fake_requests_obj
         host = host_manager.HostState("fakehost", "fakenode")
         self.assertIsNone(host.updated)
         host.pci_stats = pci_stats.PciDeviceStats(
@@ -1022,8 +1017,7 @@ class HostStateTestCase(test.NoDBTestCase):
             supported_hv_specs=[],
             hypervisor_version=hyper_ver_int,
             numa_topology=fakes.NUMA_TOPOLOGY._to_json(),
-            stats=None, pci_device_pools=None,
-            cpu_allocation_ratio=16.0, ram_allocation_ratio=1.5)
+            stats=None, pci_device_pools=None)
         host = host_manager.HostState("fakehost", "fakenode")
         host.update_from_compute_node(compute)
 

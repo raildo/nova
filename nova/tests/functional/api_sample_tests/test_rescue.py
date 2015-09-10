@@ -54,7 +54,7 @@ class RescueJsonTest(test_servers.ServersSampleBase):
     def _unrescue(self, uuid):
         response = self._do_post('servers/%s/action' % uuid,
                                  'server-unrescue-req', {})
-        self.assertEqual(202, response.status_code)
+        self.assertEqual(response.status_code, 202)
 
     def test_server_rescue(self):
         uuid = self._post_server()

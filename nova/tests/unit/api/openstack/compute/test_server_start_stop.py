@@ -13,7 +13,6 @@
 #    under the License.
 
 from mox3 import mox
-import six
 import webob
 
 from nova.api.openstack.compute import extension_info
@@ -108,9 +107,8 @@ class ServerStartStopTestV21(test.TestCase):
         self.stubs.Set(db, 'instance_get_by_uuid', fake_instance_get)
         self.stubs.Set(compute_api.API, 'start', fake_start_stop_invalid_state)
         body = dict(start="")
-        ex = self.assertRaises(webob.exc.HTTPConflict,
+        self.assertRaises(webob.exc.HTTPConflict,
             self.controller._start_server, self.req, 'test_inst', body)
-        self.assertIn('is locked', six.text_type(ex))
 
     def test_stop(self):
         self.stubs.Set(db, 'instance_get_by_uuid', fake_instance_get)
@@ -145,9 +143,8 @@ class ServerStartStopTestV21(test.TestCase):
         self.stubs.Set(db, 'instance_get_by_uuid', fake_instance_get)
         self.stubs.Set(compute_api.API, 'stop', fake_start_stop_locked_server)
         body = dict(stop="")
-        ex = self.assertRaises(webob.exc.HTTPConflict,
+        self.assertRaises(webob.exc.HTTPConflict,
             self.controller._stop_server, self.req, 'test_inst', body)
-        self.assertIn('is locked', six.text_type(ex))
 
     def test_stop_invalid_state(self):
         self.stubs.Set(db, 'instance_get_by_uuid', fake_instance_get)

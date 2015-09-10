@@ -35,6 +35,7 @@ from nova.compute import task_states
 from nova.compute import utils as compute_utils
 from nova.compute import vm_states
 from nova.conductor import api as conductor_api
+from nova.conductor import rpcapi as conductor_rpcapi
 from nova import context
 from nova import db
 from nova import exception
@@ -1424,78 +1425,6 @@ class ComputeManagerUnitTestCase(test.NoDBTestCase):
         self.assertFalse(c.cleaned)
         self.assertEqual('1', c.system_metadata['clean_attempts'])
 
-    @mock.patch.object(objects.Migration, 'obj_as_admin')
-    @mock.patch.object(objects.Migration, 'save')
-    @mock.patch.object(objects.MigrationList, 'get_by_filters')
-    @mock.patch.object(objects.InstanceList, 'get_by_filters')
-    def _test_cleanup_incomplete_migrations(self, inst_host,
-                                            mock_inst_get_by_filters,
-                                            mock_migration_get_by_filters,
-                                            mock_save, mock_obj_as_admin):
-        def fake_inst(context, uuid, host):
-            inst = objects.Instance(context)
-            inst.uuid = uuid
-            inst.host = host
-            return inst
-
-        def fake_migration(uuid, status, inst_uuid, src_host, dest_host):
-            migration = objects.Migration()
-            migration.uuid = uuid
-            migration.status = status
-            migration.instance_uuid = inst_uuid
-            migration.source_compute = src_host
-            migration.dest_compute = dest_host
-            return migration
-
-        fake_instances = [fake_inst(self.context, '111', inst_host),
-                          fake_inst(self.context, '222', inst_host)]
-
-        fake_migrations = [fake_migration('123', 'error', '111',
-                                          'fake-host', 'fake-mini'),
-                           fake_migration('456', 'error', '222',
-                                          'fake-host', 'fake-mini')]
-
-        mock_migration_get_by_filters.return_value = fake_migrations
-        mock_inst_get_by_filters.return_value = fake_instances
-
-        with mock.patch.object(self.compute.driver, 'delete_instance_files'):
-            self.compute._cleanup_incomplete_migrations(self.context)
-
-        # Ensure that migration status is set to 'failed' after instance
-        # files deletion for those instances whose instance.host is not
-        # same as compute host where periodic task is running.
-        for inst in fake_instances:
-            if inst.host != CONF.host:
-                for mig in fake_migrations:
-                    if inst.uuid == mig.instance_uuid:
-                        self.assertEqual('failed', mig.status)
-
-    def test_cleanup_incomplete_migrations_dest_node(self):
-        """Test to ensure instance files are deleted from destination node.
-
-        If instance gets deleted during resizing/revert-resizing operation,
-        in that case instance files gets deleted from instance.host (source
-        host here), but there is possibility that instance files could be
-        present on destination node.
-        This test ensures that `_cleanup_incomplete_migration` periodic
-        task deletes orphaned instance files from destination compute node.
-        """
-        self.flags(host='fake-mini')
-        self._test_cleanup_incomplete_migrations('fake-host')
-
-    def test_cleanup_incomplete_migrations_source_node(self):
-        """Test to ensure instance files are deleted from source node.
-
-        If instance gets deleted during resizing/revert-resizing operation,
-        in that case instance files gets deleted from instance.host (dest
-        host here), but there is possibility that instance files could be
-        present on source node.
-        This test ensures that `_cleanup_incomplete_migration` periodic
-        task deletes orphaned instance files from source compute node.
-        """
-        self.flags(host='fake-host')
-        self._test_cleanup_incomplete_migrations('fake-mini')
-
     def test_attach_interface_failure(self):
         # Test that the fault methods are invoked when an attach fails
         db_instance = fake_instance.fake_db_instance()
@@ -2318,7 +2247,8 @@ class ComputeManagerUnitTestCase(test.NoDBTestCase):
             self.assertEqual(expected_vm_state, instance.vm_state)
             # check revert_task_state decorator
             update_mock.assert_called_once_with(
-                self.context, instance, task_state=expected_task_state)
+                self.context, instance.uuid,
+                task_state=expected_task_state)
             # check wrap_instance_fault decorator
             add_fault_mock.assert_called_once_with(
                 self.context, instance, mock.ANY, mock.ANY)
@@ -2404,7 +2334,7 @@ class ComputeManagerUnitTestCase(test.NoDBTestCase):
 
         self.assertRaises(NotImplementedError, do_test)
         inst_update_mock.assert_called_once_with(
-            self.context, instance,
+            self.context, instance.uuid,
             vm_state=vm_states.STOPPED, task_state=None)
 
     @mock.patch('nova.compute.manager.ComputeManager._instance_update')
@@ -2420,7 +2350,7 @@ class ComputeManagerUnitTestCase(test.NoDBTestCase):
 
         self.assertRaises(test.TestingException, do_test)
         inst_update_mock.assert_called_once_with(
-            self.context, instance,
+            self.context, instance.uuid,
             vm_state=vm_states.ACTIVE, task_state=None)
 
     @mock.patch('nova.compute.manager.ComputeManager.'
@@ -2749,21 +2679,6 @@ class ComputeManagerUnitTestCase(test.NoDBTestCase):
             self.compute._set_instance_obj_error_state(self.context, instance)
             self.assertEqual(vm_states.ERROR, instance.vm_state)
             self.assertEqual(task_states.SPAWNING, instance.task_state)
-
-    @mock.patch.object(objects.Instance, 'save')
-    def test_instance_update(self, mock_save):
-        instance = objects.Instance(task_state=task_states.SCHEDULING,
-                                    vm_state=vm_states.BUILDING)
-        updates = {'task_state': None, 'vm_state': vm_states.ERROR}
-
-        with mock.patch.object(self.compute,
-                               '_update_resource_tracker') as mock_rt:
-            self.compute._instance_update(self.context, instance, **updates)
-
-            self.assertIsNone(instance.task_state)
-            self.assertEqual(vm_states.ERROR, instance.vm_state)
-            mock_save.assert_called_once_with()
-            mock_rt.assert_called_once_with(self.context, instance)
 
 
 class ComputeManagerBuildInstanceTestCase(test.NoDBTestCase):
@@ -3360,15 +3275,9 @@ class ComputeManagerBuildInstanceTestCase(test.NoDBTestCase):
         self._test_build_and_run_spawn_exceptions(
             exception.NoMoreFixedIps("error messge"))
 
-    def test_build_and_run_flavor_disk_smaller_image_exception(self):
+    def test_build_and_run_flavor_disk_too_small_exception(self):
         self._test_build_and_run_spawn_exceptions(
-            exception.FlavorDiskSmallerThanImage(
-                flavor_size=0, image_size=1))
-
-    def test_build_and_run_flavor_disk_smaller_min_disk(self):
-        self._test_build_and_run_spawn_exceptions(
-            exception.FlavorDiskSmallerThanMinDisk(
-                flavor_size=0, image_min_disk=1))
+            exception.FlavorDiskTooSmall())
 
     def test_build_and_run_flavor_memory_too_small_exception(self):
         self._test_build_and_run_spawn_exceptions(
@@ -3785,7 +3694,7 @@ class ComputeManagerBuildInstanceTestCase(test.NoDBTestCase):
             self.assertEqual('False',
                     self.instance.system_metadata['network_allocated'])
 
-    @mock.patch.object(manager.ComputeManager, '_instance_update')
+    @mock.patch.object(conductor_rpcapi.ConductorAPI, 'instance_update')
     def test_launched_at_in_create_end_notification(self,
             mock_instance_update):
 
@@ -3816,7 +3725,7 @@ class ComputeManagerBuildInstanceTestCase(test.NoDBTestCase):
                     mock_notify.call_count - 1]
             self.assertEqual(expected_call, create_end_call)
 
-    @mock.patch.object(manager.ComputeManager, '_instance_update')
+    @mock.patch.object(conductor_rpcapi.ConductorAPI, 'instance_update')
     def test_create_end_on_instance_delete(self, mock_instance_update):
 
         def fake_notify(*args, **kwargs):

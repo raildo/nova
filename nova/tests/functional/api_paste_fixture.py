@@ -23,16 +23,15 @@ from nova import paths
 CONF = cfg.CONF
 
 
-class ApiPasteV21Fixture(fixtures.Fixture):
+class ApiPasteFixture(fixtures.Fixture):
 
     def _replace_line(self, target_file, line):
-        # TODO(johnthetubaguy) should really point the tests at /v2.1
         target_file.write(line.replace(
-            "/v2: openstack_compute_api_v21_legacy_v2_compatible",
+            "/v2: openstack_compute_api_v2",
             "/v2: openstack_compute_api_v21"))
 
     def setUp(self):
-        super(ApiPasteV21Fixture, self).setUp()
+        super(ApiPasteFixture, self).setUp()
         CONF.set_default('api_paste_config',
                          paths.state_path_def('etc/nova/api-paste.ini'))
         tmp_api_paste_dir = self.useFixture(fixtures.TempDir())
@@ -45,12 +44,12 @@ class ApiPasteV21Fixture(fixtures.Fixture):
         CONF.set_override('api_paste_config', tmp_api_paste_file_name)
 
 
-class ApiPasteLegacyV2Fixture(ApiPasteV21Fixture):
+class ApiPasteV2CompatibleFixture(ApiPasteFixture):
 
     def _replace_line(self, target_file, line):
-        # NOTE(johnthetubaguy) this is hack so we test the legacy_v2 code
-        # even though its disable by default in api-paste.ini
+        line = line.replace("noauth2 osapi_compute_app_v21",
+            "noauth2 legacy_v2_compatible osapi_compute_app_v21")
         line = line.replace(
-            "/v2: openstack_compute_api_v21_legacy_v2_compatible",
-            "/v2: openstack_compute_api_legacy_v2")
+            "/v2: openstack_compute_api_v2",
+            "/v2: openstack_compute_api_v21")
         target_file.write(line)

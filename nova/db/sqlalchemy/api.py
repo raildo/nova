@@ -6037,7 +6037,7 @@ def _instance_group_get_query(context, model_class, id_field=None, id=None,
                               session=None, read_deleted=None):
     columns_to_join = {models.InstanceGroup: ['_policies', '_members']}
     query = model_query(context, model_class, session=session,
-                        read_deleted=read_deleted, project_only=True)
+                        read_deleted=read_deleted)
 
     for c in columns_to_join.get(model_class, []):
         query = query.options(joinedload(c))
@@ -6256,9 +6256,10 @@ def instance_group_members_add(context, group_uuid, members,
 
 def instance_group_member_delete(context, group_uuid, instance_id):
     id = _instance_group_id(context, group_uuid)
-    count = _instance_group_model_get_query(context,
-                                            models.InstanceGroupMember,
-                                            id).\
+    count = _instance_group_get_query(context,
+                                      models.InstanceGroupMember,
+                                      models.InstanceGroupMember.group_id,
+                                      id).\
                             filter_by(instance_id=instance_id).\
                             soft_delete()
     if count == 0:
@@ -6406,16 +6407,11 @@ def instance_tag_set(context, instance_uuid, tags):
         to_delete = existing - tags
         to_add = tags - existing
 
-        if to_delete:
-            session.query(models.Tag).filter_by(
-                resource_id=instance_uuid).filter(
-                models.Tag.tag.in_(to_delete)).delete(
-                synchronize_session=False)
+        session.query(models.Tag).filter_by(resource_id=instance_uuid).filter(
+            models.Tag.tag.in_(to_delete)).delete(synchronize_session=False)
 
-        if to_add:
-            data = [
-                {'resource_id': instance_uuid, 'tag': tag} for tag in to_add]
-            session.execute(models.Tag.__table__.insert(), data)
+        data = [{'resource_id': instance_uuid, 'tag': tag} for tag in to_add]
+        session.execute(models.Tag.__table__.insert(), data)
 
         return session.query(models.Tag).filter_by(
             resource_id=instance_uuid).all()

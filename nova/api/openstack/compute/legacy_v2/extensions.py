@@ -17,19 +17,13 @@ from oslo_config import cfg
 from oslo_log import log as logging
 
 from nova.api.openstack import extensions as base_extensions
-from nova.i18n import _LW
-
-STANDARD_EXTENSIONS = ('nova.api.openstack.compute.legacy_v2.contrib.' +
-                       'standard_extensions')
 
 ext_opts = [
     cfg.MultiStrOpt(
         'osapi_compute_extension',
-        default=[STANDARD_EXTENSIONS],
-        help='osapi compute extension to load. '
-        'This option will be removed in the near future. '
-        'After that point you have to run all of the API.',
-        deprecated_for_removal=True),
+        default=['nova.api.openstack.compute.legacy_v2.contrib.'
+                 'standard_extensions'],
+        help='osapi compute extension to load'),
 ]
 CONF = cfg.CONF
 CONF.register_opts(ext_opts)
@@ -40,10 +34,6 @@ LOG = logging.getLogger(__name__)
 class ExtensionManager(base_extensions.ExtensionManager):
     def __init__(self):
         self.cls_list = CONF.osapi_compute_extension
-        if (len(self.cls_list) > 0 and
-                self.cls_list[0] != STANDARD_EXTENSIONS):
-            LOG.warning(_LW('The extension configure options are deprecated. '
-                            'In the near future you must run all of the API.'))
         self.extensions = {}
         self.sorted_ext_list = []
         self._load_extensions()

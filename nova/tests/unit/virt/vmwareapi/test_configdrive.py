@@ -94,8 +94,7 @@ class ConfigDriveTestCase(test.NoDBTestCase):
         }
 
         class FakeInstanceMetadata(object):
-            def __init__(self, instance, content=None, extra_md=None,
-                         network_info=None):
+            def __init__(self, instance, content=None, extra_md=None):
                 pass
 
             def metadata_for_config_drive(self):
@@ -141,7 +140,6 @@ class ConfigDriveTestCase(test.NoDBTestCase):
         self.mox.StubOutWithMock(vmops.VMwareVMOps, '_create_config_drive')
         self.mox.StubOutWithMock(vmops.VMwareVMOps, '_attach_cdrom_to_vm')
         self.conn._vmops._create_config_drive(self.test_instance,
-                                               mox.IgnoreArg(),
                                                mox.IgnoreArg(),
                                                mox.IgnoreArg(),
                                                mox.IgnoreArg(),

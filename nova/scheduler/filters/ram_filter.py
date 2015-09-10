@@ -14,6 +14,7 @@
 #    License for the specific language governing permissions and limitations
 #    under the License.
 
+from oslo_config import cfg
 from oslo_log import log as logging
 
 from nova.i18n import _LW
@@ -21,6 +22,12 @@ from nova.scheduler import filters
 from nova.scheduler.filters import utils
 
 LOG = logging.getLogger(__name__)
+
+CONF = cfg.CONF
+
+# TODO(sbauza): Remove the import once all compute nodes are reporting the
+# allocation ratio to the HostState
+CONF.import_opt('ram_allocation_ratio', 'nova.compute.resource_tracker')
 
 
 class BaseRamFilter(filters.BaseHostFilter):
@@ -69,7 +76,7 @@ class RamFilter(BaseRamFilter):
     """Ram Filter with over subscription flag."""
 
     def _get_ram_allocation_ratio(self, host_state, filter_properties):
-        return host_state.ram_allocation_ratio
+        return CONF.ram_allocation_ratio
 
 
 class AggregateRamFilter(BaseRamFilter):
@@ -85,9 +92,9 @@ class AggregateRamFilter(BaseRamFilter):
 
         try:
             ratio = utils.validate_num_values(
-                aggregate_vals, host_state.ram_allocation_ratio, cast_to=float)
+                aggregate_vals, CONF.ram_allocation_ratio, cast_to=float)
         except ValueError as e:
             LOG.warning(_LW("Could not decode ram_allocation_ratio: '%s'"), e)
-            ratio = host_state.ram_allocation_ratio
+            ratio = CONF.ram_allocation_ratio
 
         return ratio

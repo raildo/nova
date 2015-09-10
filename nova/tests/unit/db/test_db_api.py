@@ -6989,8 +6989,6 @@ class ComputeNodeTestCase(test.TestCase, ModelsObjectComparatorMixin):
                                  pci_stats='',
                                  metrics='',
                                  extra_resources='',
-                                 cpu_allocation_ratio=16.0,
-                                 ram_allocation_ratio=1.5,
                                  stats='', numa_topology='')
         # add some random stats
         self.stats = dict(num_instances=3, num_proj_12345=2,
@@ -8279,21 +8277,12 @@ class InstanceGroupDBApiTestCase(test.TestCase, ModelsObjectComparatorMixin):
         super(InstanceGroupDBApiTestCase, self).setUp()
         self.user_id = 'fake_user'
         self.project_id = 'fake_project'
-        self.new_user_id = 'new_user_id'
-        self.new_project_id = 'new_project_id'
         self.context = context.RequestContext(self.user_id, self.project_id)
-        self.new_context = context.RequestContext(self.new_user_id,
-                                                  self.new_project_id)
 
     def _get_default_values(self):
         return {'name': 'fake_name',
                 'user_id': self.user_id,
                 'project_id': self.project_id}
-
-    def _get_new_default_values(self):
-        return {'name': 'fake_new_name',
-                'user_id': self.new_user_id,
-                'project_id': self.new_project_id}
 
     def _create_instance_group(self, context, values, policies=None,
                                members=None):
@@ -8332,13 +8321,14 @@ class InstanceGroupDBApiTestCase(test.TestCase, ModelsObjectComparatorMixin):
     def test_instance_group_update_simple(self):
         values = self._get_default_values()
         result1 = self._create_instance_group(self.context, values)
-        values = {'name': 'new_name'}
+        values = {'name': 'new_name', 'user_id': 'new_user',
+                  'project_id': 'new_project'}
         db.instance_group_update(self.context, result1['uuid'],
                                  values)
         result2 = db.instance_group_get(self.context, result1['uuid'])
         self.assertEqual(result1['uuid'], result2['uuid'])
         ignored_keys = ['id', 'uuid', 'deleted', 'deleted_at', 'updated_at',
-                        'created_at', 'project_id', 'user_id']
+                        'created_at']
         self._assertEqualObjects(result2, values, ignored_keys)
 
     def test_instance_group_delete(self):
@@ -8381,21 +8371,19 @@ class InstanceGroupDBApiTestCase(test.TestCase, ModelsObjectComparatorMixin):
         values = self._get_default_values()
         result1 = self._create_instance_group(self.context, values)
         groups = db.instance_group_get_all_by_project_id(self.context,
-                                                         self.project_id)
+                                                         'fake_project')
         self.assertEqual(1, len(groups))
-        values = self._get_new_default_values()
-        result2 = self._create_instance_group(self.new_context, values)
+        values = self._get_default_values()
+        values['project_id'] = 'new_project_id'
+        result2 = self._create_instance_group(self.context, values)
         groups = db.instance_group_get_all(self.context)
-        groups.extend(db.instance_group_get_all(self.new_context))
         results = [result1, result2]
         self._assertEqualListsOfObjects(results, groups)
-        projects = [{'context': self.context, 'name': self.project_id,
-                     'value': [result1]},
-                    {'context': self.new_context, 'name': self.new_project_id,
-                     'value': [result2]}]
+        projects = [{'name': 'fake_project', 'value': [result1]},
+                    {'name': 'new_project_id', 'value': [result2]}]
         for project in projects:
-            groups = db.instance_group_get_all_by_project_id(
-                project['context'], project['name'])
+            groups = db.instance_group_get_all_by_project_id(self.context,
+                                                             project['name'])
             self._assertEqualListsOfObjects(project['value'], groups)
 
     def test_instance_group_update(self):
@@ -8441,35 +8429,6 @@ class InstanceGroupDBApiTestCase(test.TestCase, ModelsObjectComparatorMixin):
                                                    'instance_id1')
 
         self.assertEqual(group2.uuid, group1.uuid)
-
-    def test_instance_group_get_by_other_project_user(self):
-        values = self._get_default_values()
-        result = self._create_instance_group(self.context, values)
-        self.assertRaises(exception.InstanceGroupNotFound,
-                          db.instance_group_get,
-                          self.new_context, result['uuid'])
-
-    def test_instance_group_delete_by_other_project_user(self):
-        values = self._get_default_values()
-        result = self._create_instance_group(self.context, values)
-        self.assertRaises(exception.InstanceGroupNotFound,
-                          db.instance_group_delete,
-                          self.new_context, result['uuid'])
-
-    def test_instance_group_get_by_admin(self):
-        values = self._get_default_values()
-        result = self._create_instance_group(self.context, values)
-        group = db.instance_group_get(context.get_admin_context(),
-                                      result['uuid'])
-        self.assertEqual(result['uuid'], group.uuid)
-        self.assertEqual(values['user_id'], group.user_id)
-        self.assertEqual(values['project_id'], group.project_id)
-
-    def test_instance_group_delete_by_admin(self):
-        values = self._get_default_values()
-        result = self._create_instance_group(self.context, values)
-        db.instance_group_delete(context.get_admin_context(),
-                                 result['uuid'])
 
 
 class InstanceGroupMembersDBApiTestCase(InstanceGroupDBApiTestCase):
@@ -8856,37 +8815,6 @@ class TestDBInstanceTags(test.TestCase):
         tags = self._get_tags_from_resp(tag_refs)
         expected = [(uuid, tag3), (uuid, tag4), (uuid, tag2)]
         self.assertEqual(set(expected), set(tags))
-
-    @mock.patch('nova.db.sqlalchemy.models.Tag.__table__.insert',
-                return_value=models.Tag.__table__.insert())
-    def test_instance_tag_set_empty_add(self, mock_insert):
-        uuid = self._create_instance()
-        tag1 = 'tag1'
-        tag2 = 'tag2'
-
-        db.instance_tag_set(self.context, uuid, [tag1, tag2])
-
-        # Check insert() was called to insert 'tag1' and 'tag2'
-        mock_insert.assert_called_once_with()
-
-        mock_insert.reset_mock()
-        db.instance_tag_set(self.context, uuid, [tag1])
-
-        # Check insert() wasn't called because there are no tags for creation
-        mock_insert.assert_not_called()
-
-    @mock.patch('sqlalchemy.orm.query.Query.delete')
-    def test_instance_tag_set_empty_delete(self, mock_delete):
-        uuid = self._create_instance()
-        db.instance_tag_set(self.context, uuid, ['tag1', 'tag2'])
-
-        # Check delete() wasn't called because there are no tags for deletion
-        mock_delete.assert_not_called()
-
-        db.instance_tag_set(self.context, uuid, ['tag1', 'tag3'])
-
-        # Check delete() was called to delete 'tag2'
-        mock_delete.assert_called_once_with(synchronize_session=False)
 
     def test_instance_tag_get_by_instance_uuid(self):
         uuid1 = self._create_instance()

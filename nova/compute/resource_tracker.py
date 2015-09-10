@@ -56,23 +56,17 @@ resource_tracker_opts = [
 
 allocation_ratio_opts = [
     cfg.FloatOpt('cpu_allocation_ratio',
-        default=0.0,
+        default=16.0,
         help='Virtual CPU to physical CPU allocation ratio which affects '
              'all CPU filters. This configuration specifies a global ratio '
              'for CoreFilter. For AggregateCoreFilter, it will fall back to '
-             'this configuration value if no per-aggregate setting found. '
-             'NOTE: This can be set per-compute, or if set to 0.0, the value '
-             'set on the scheduler node(s) will be used '
-             'and defaulted to 16.0'),
+             'this configuration value if no per-aggregate setting found.'),
     cfg.FloatOpt('ram_allocation_ratio',
-        default=0.0,
+        default=1.5,
         help='Virtual ram to physical ram allocation ratio which affects '
              'all ram filters. This configuration specifies a global ratio '
              'for RamFilter. For AggregateRamFilter, it will fall back to '
-             'this configuration value if no per-aggregate setting found. '
-             'NOTE: This can be set per-compute, or if set to 0.0, the value '
-             'set on the scheduler node(s) will be used '
-             'and defaulted to 1.5'),
+             'this configuration value if no per-aggregate setting found.'),
 ]
 
 
@@ -84,26 +78,6 @@ LOG = logging.getLogger(__name__)
 COMPUTE_RESOURCE_SEMAPHORE = "compute_resources"
 
 CONF.import_opt('my_ip', 'nova.netconf')
-
-
-def _instance_in_resize_state(instance):
-    """Returns True if the instance is in one of the resizing states.
-
-    :param instance: `nova.objects.Instance` object
-    """
-    vm = instance.vm_state
-    task = instance.task_state
-
-    if vm == vm_states.RESIZED:
-        return True
-
-    if (vm in [vm_states.ACTIVE, vm_states.STOPPED]
-            and task in [task_states.RESIZE_PREP,
-            task_states.RESIZE_MIGRATING, task_states.RESIZE_MIGRATED,
-            task_states.RESIZE_FINISH]):
-        return True
-
-    return False
 
 
 class ResourceTracker(object):
@@ -126,8 +100,6 @@ class ResourceTracker(object):
             ext_resources.ResourceHandler(CONF.compute_resources)
         self.old_resources = objects.ComputeNode()
         self.scheduler_client = scheduler_client.SchedulerClient()
-        self.ram_allocation_ratio = CONF.ram_allocation_ratio
-        self.cpu_allocation_ratio = CONF.cpu_allocation_ratio
 
     @utils.synchronized(COMPUTE_RESOURCE_SEMAPHORE)
     def instance_claim(self, context, instance_ref, limits=None):
@@ -405,10 +377,6 @@ class ResourceTracker(object):
         # purge old stats and init with anything passed in by the driver
         self.stats.clear()
         self.stats.digest_stats(resources.get('stats'))
-
-        # update the allocation ratios for the related ComputeNode object
-        self.compute_node.ram_allocation_ratio = self.ram_allocation_ratio
-        self.compute_node.cpu_allocation_ratio = self.cpu_allocation_ratio
 
         # now copy rest to compute_node
         self.compute_node.update_from_virt_driver(resources)
@@ -764,7 +732,7 @@ class ResourceTracker(object):
             uuid = instance.uuid
 
             # skip migration if instance isn't in a resize state:
-            if not _instance_in_resize_state(instance):
+            if not self._instance_in_resize_state(instance):
                 LOG.warning(_LW("Instance not resizing, skipping migration."),
                             instance_uuid=uuid)
                 continue
@@ -886,6 +854,21 @@ class ResourceTracker(object):
         if missing_keys:
             reason = _("Missing keys: %s") % missing_keys
             raise exception.InvalidInput(reason=reason)
+
+    def _instance_in_resize_state(self, instance):
+        vm = instance['vm_state']
+        task = instance['task_state']
+
+        if vm == vm_states.RESIZED:
+            return True
+
+        if (vm in [vm_states.ACTIVE, vm_states.STOPPED]
+                and task in [task_states.RESIZE_PREP,
+                task_states.RESIZE_MIGRATING, task_states.RESIZE_MIGRATED,
+                task_states.RESIZE_FINISH]):
+            return True
+
+        return False
 
     def _get_instance_type(self, context, instance, prefix,
             instance_type_id=None):

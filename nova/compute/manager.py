@@ -285,21 +285,15 @@ def errors_out_migration(function):
     def decorated_function(self, context, *args, **kwargs):
         try:
             return function(self, context, *args, **kwargs)
-        except Exception as ex:
+        except Exception:
             with excutils.save_and_reraise_exception():
                 wrapped_func = utils.get_wrapped_function(function)
                 keyed_args = safe_utils.getcallargs(wrapped_func, context,
                                                     *args, **kwargs)
                 migration = keyed_args['migration']
-
-                # NOTE(rajesht): If InstanceNotFound error is thrown from
-                # decorated function, migration status should be set to
-                # 'error', without checking current migration status.
-                if not isinstance(ex, exception.InstanceNotFound):
-                    status = migration.status
-                    if status not in ['migrating', 'post-migrating']:
-                        return
-
+                status = migration.status
+                if status not in ['migrating', 'post-migrating']:
+                    return
                 migration.status = 'error'
                 try:
                     with migration.obj_as_admin():
@@ -335,9 +329,11 @@ def reverts_task_state(function):
                 # NOTE(mriedem): 'instance' must be in keyed_args because we
                 # have utils.expects_func_args('instance') decorating this
                 # method.
-                instance = keyed_args['instance']
+                instance_uuid = keyed_args['instance']['uuid']
                 try:
-                    self._instance_update(context, instance, task_state=None)
+                    self._instance_update(context,
+                                          instance_uuid,
+                                          task_state=None)
                 except exception.InstanceNotFound:
                     # We might delete an instance that failed to build shortly
                     # after it errored out this is an expected case and we
@@ -346,7 +342,7 @@ def reverts_task_state(function):
                 except Exception as e:
                     msg = _LW("Failed to revert task state for instance. "
                               "Error: %s")
-                    LOG.warning(msg, e, instance=instance)
+                    LOG.warning(msg, e, instance_uuid=instance_uuid)
 
     return decorated_function
 
@@ -731,18 +727,19 @@ class ComputeManager(manager.Manager):
     def _update_resource_tracker(self, context, instance):
         """Let the resource tracker know that an instance has changed state."""
 
-        if (instance.host == self.host and
-                self.driver.node_is_available(instance.node)):
-            rt = self._get_resource_tracker(instance.node)
+        if (instance['host'] == self.host and
+                self.driver.node_is_available(instance['node'])):
+            rt = self._get_resource_tracker(instance.get('node'))
             rt.update_usage(context, instance)
 
-    def _instance_update(self, context, instance, **kwargs):
+    def _instance_update(self, context, instance_uuid, **kwargs):
         """Update an instance in the database using kwargs as value."""
 
-        for k, v in kwargs.items():
-            setattr(instance, k, v)
-        instance.save()
-        self._update_resource_tracker(context, instance)
+        instance_ref = self.conductor_api.instance_update(context,
+                                                          instance_uuid,
+                                                          **kwargs)
+        self._update_resource_tracker(context, instance_ref)
+        return instance_ref
 
     def _nil_out_instance_obj_host_and_node(self, instance):
         # NOTE(jwcroppe): We don't do instance.save() here for performance
@@ -1487,7 +1484,7 @@ class ComputeManager(manager.Manager):
                    'num': retry['num_attempts']}, instance_uuid=instance_uuid)
 
         # reset the task state:
-        self._instance_update(context, instance, task_state=task_state)
+        self._instance_update(context, instance_uuid, task_state=task_state)
 
         if exc_info:
             # stringify to avoid circular ref problem in json serialization:
@@ -3386,7 +3383,6 @@ class ComputeManager(manager.Manager):
     @wrap_exception()
     @reverts_task_state
     @wrap_instance_event
-    @errors_out_migration
     @wrap_instance_fault
     def revert_resize(self, context, instance, migration, reservations):
         """Destroys the new instance on the destination machine.
@@ -3444,7 +3440,6 @@ class ComputeManager(manager.Manager):
     @wrap_exception()
     @reverts_task_state
     @wrap_instance_event
-    @errors_out_migration
     @wrap_instance_fault
     def finish_revert_resize(self, context, instance, reservations, migration):
         """Finishes the second half of reverting a resize.
@@ -5458,10 +5453,6 @@ class ComputeManager(manager.Manager):
                 LOG.debug('Instance no longer exists. Unable to refresh',
                           instance=instance)
                 return
-            except exception.InstanceInfoCacheNotFound:
-                # InstanceInfoCache is gone.
-                LOG.debug('InstanceInfoCache no longer exists. '
-                          'Unable to refresh', instance=instance)
             except Exception:
                 LOG.error(_LE('An error occurred while refreshing the network '
                               'cache.'), instance=instance, exc_info=True)
@@ -6257,7 +6248,7 @@ class ComputeManager(manager.Manager):
                              "%(error)s"),
                          {'state': instance_state, 'error': error},
                          instance_uuid=instance_uuid)
-                self._instance_update(context, instance,
+                self._instance_update(context, instance_uuid,
                                       vm_state=instance_state,
                                       task_state=None)
         except exception.InstanceFaultRollback as error:
@@ -6265,7 +6256,7 @@ class ComputeManager(manager.Manager):
                 quotas.rollback()
             LOG.info(_LI("Setting instance back to ACTIVE after: %s"),
                      error, instance_uuid=instance_uuid)
-            self._instance_update(context, instance,
+            self._instance_update(context, instance_uuid,
                                   vm_state=vm_states.ACTIVE,
                                   task_state=None)
             raise error.inner_exception
@@ -6426,51 +6417,6 @@ class ComputeManager(manager.Manager):
                     instance.cleaned = True
                 with utils.temporary_mutation(context, read_deleted='yes'):
                     instance.save()
-
-    @periodic_task.periodic_task(spacing=CONF.instance_delete_interval)
-    def _cleanup_incomplete_migrations(self, context):
-        """Delete instance files on failed resize/revert-resize operation
-
-        During resize/revert-resize operation, if that instance gets deleted
-        in-between then instance files might remain either on source or
-        destination compute node because of race condition.
-        """
-        LOG.debug('Cleaning up deleted instances with incomplete migration ')
-        migration_filters = {'host': CONF.host,
-                             'status': 'error'}
-        migrations = objects.MigrationList.get_by_filters(context,
-                                                          migration_filters)
-
-        if not migrations:
-            return
-
-        inst_uuid_from_migrations = set([migration.instance_uuid for migration
-                                         in migrations])
-
-        inst_filters = {'deleted': True, 'soft_deleted': False,
-                        'uuid': inst_uuid_from_migrations}
-        attrs = ['info_cache', 'security_groups', 'system_metadata']
-        with utils.temporary_mutation(context, read_deleted='yes'):
-            instances = objects.InstanceList.get_by_filters(
-                context, inst_filters, expected_attrs=attrs, use_slave=True)
-
-        for instance in instances:
-            if instance.host != CONF.host:
-                for migration in migrations:
-                    if instance.uuid == migration.instance_uuid:
-                        # Delete instance files if not cleanup properly either
-                        # from the source or destination compute nodes when
-                        # the instance is deleted during resizing.
-                        self.driver.delete_instance_files(instance)
-                        try:
-                            migration.status = 'failed'
-                            with migration.obj_as_admin():
-                                migration.save()
-                        except exception.MigrationNotFound:
-                            LOG.warning(_LW("Migration %s is not found."),
-                                        migration.id, context=context,
-                                        instance=instance)
-                        break
 
     @messaging.expected_exceptions(exception.InstanceQuiesceNotSupported,
                                    exception.QemuGuestAgentNotEnabled,

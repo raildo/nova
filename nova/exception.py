@@ -782,11 +782,6 @@ class PortNotFree(Invalid):
     msg_fmt = _("No free port available for instance %(instance)s.")
 
 
-class PortBindingFailed(Invalid):
-    msg_fmt = _("Binding failed for port %(port_id)s, please check neutron "
-                "logs for more information.")
-
-
 class FixedIpExists(NovaException):
     msg_fmt = _("Fixed ip %(address)s already exists.")
 
@@ -1265,24 +1260,7 @@ class FlavorMemoryTooSmall(NovaException):
 
 
 class FlavorDiskTooSmall(NovaException):
-    msg_fmt = _("The created instance's disk would be too small.")
-
-
-class FlavorDiskSmallerThanImage(FlavorDiskTooSmall):
-    msg_fmt = _("Flavor's disk is too small for requested image. Flavor disk "
-                "is %(flavor_size)i bytes, image is %(image_size)i bytes.")
-
-
-class FlavorDiskSmallerThanMinDisk(FlavorDiskTooSmall):
-    msg_fmt = _("Flavor's disk is smaller than the minimum size specified in "
-                "image metadata. Flavor disk is %(flavor_size)i bytes, "
-                "minimum size is %(image_min_disk)i bytes.")
-
-
-class VolumeSmallerThanMinDisk(FlavorDiskTooSmall):
-    msg_fmt = _("Volume is smaller than the minimum size specified in image "
-                "metadata. Volume size is %(volume_size)i bytes, minimum "
-                "size is %(image_min_disk)i bytes.")
+    msg_fmt = _("Flavor's disk is too small for requested image.")
 
 
 class InsufficientFreeMemory(NovaException):
@@ -1598,10 +1576,6 @@ class InstanceGroupPolicyNotFound(NotFound):
     msg_fmt = _("Instance group %(group_uuid)s has no policy %(policy)s.")
 
 
-class InstanceGroupSaveException(NovaException):
-    msg_fmt = _("%(field)s should not be part of the updates.")
-
-
 class PluginRetriesExceeded(NovaException):
     msg_fmt = _("Number of retries to plugin (%(num_retries)d) exceeded.")
 
@@ -1810,11 +1784,6 @@ class InvalidHostname(Invalid):
 
 class NumaTopologyNotFound(NotFound):
     msg_fmt = _("Instance %(instance_uuid)s does not specify a NUMA topology")
-
-
-class MigrationContextNotFound(NotFound):
-    msg_fmt = _("Instance %(instance_uuid)s does not specify a migration "
-                "context.")
 
 
 class SocketPortRangeExhaustedException(NovaException):
